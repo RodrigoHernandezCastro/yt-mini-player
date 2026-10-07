@@ -1,0 +1,42 @@
+﻿YT Mini Player 0.2.0
+====================
+
+Reproductor flotante de YouTube para Windows 10/11.
+
+INSTALAR
+  1. Descomprime este zip en cualquier carpeta.
+  2. Doble clic en "Instalar.cmd".
+     Copia la app a %LOCALAPPDATA%\Programs\YT Mini Player, crea accesos
+     directos en el menú Inicio y el escritorio, y la abre. No pide
+     permisos de administrador.
+
+  Si Windows muestra "Windows protegió su PC" (SmartScreen), es porque el
+  ejecutable no está firmado: pulsa "Más información" → "Ejecutar de todas
+  formas". Solo pasa la primera vez.
+
+  También puedes ejecutar yt-mini-player.exe directamente, sin instalar
+  (mantén WebView2Loader.dll en la misma carpeta si viene en el zip).
+
+USO RÁPIDO
+  Mover ..................... arrastra el video (o Alt + arrastrar)
+  Redimensionar ............. arrastra los bordes o las esquinas
+  Botones ................... acerca el ratón al borde derecho
+  Ayuda de atajos ........... F1
+  Mostrar / ocultar ......... Ctrl+Alt+Y (funciona aunque esté oculto)
+  Reproducir / pausar ....... Ctrl+Alt+P
+  Salir ..................... Ctrl+Q, o clic derecho en el icono de la
+                              bandeja → Salir
+
+EXTENSIONES DE CHROME
+  Menú "Más" (⋯) → Extensiones → Abrir carpeta. Copia ahí extensiones
+  descomprimidas, archivos .crx o .zip, y pulsa "Recargar". Después
+  recarga la página con F5.
+  No hay Chrome Web Store: hay que conseguir el archivo de la extensión
+  (muchas lo publican en GitHub). Las ventanas emergentes de los botones
+  de extensión no existen en WebView2; si la extensión tiene página de
+  opciones, se abre desde el menú.
+
+DESINSTALAR
+  Doble clic en "Desinstalar.cmd". La sesión de Google y los ajustes se
+  conservan en %LOCALAPPDATA%\yt_mini_player; bórrala a mano si quieres
+  eliminarlos.
