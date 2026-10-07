@@ -1,159 +1,176 @@
 # YT Mini Player
 
-Reproductor flotante de YouTube para Windows 10/11: ventana sin bordes, siempre visible,
-sesión persistente. Rust + [tao](https://crates.io/crates/tao) + [wry](https://crates.io/crates/wry) (WebView2).
+A lightweight, always-on-top YouTube player for Windows 10/11. It runs the full YouTube site in a
+borderless floating window on top of the system's WebView2 runtime, so you keep playlists,
+quality settings and your Premium account without running a full browser.
 
-Versión 0.2.0.
+Built with Rust, [tao](https://crates.io/crates/tao) and [wry](https://crates.io/crates/wry).
+Version 0.2.0. The in-app interface is in Spanish.
 
-## Instalar (usuario final)
+## Install
 
-Descomprime `YT-Mini-Player-0.2.0-win64.zip` y haz doble clic en **Instalar.cmd**. Copia la app a
-`%LOCALAPPDATA%\Programs\YT Mini Player`, crea accesos directos en el menú Inicio y el escritorio,
-y la abre. No pide administrador. `Desinstalar.cmd` la quita (conserva la sesión).
+1. Download `YT-Mini-Player-0.2.0-win64.zip` from the Releases page and extract it anywhere.
+2. Double-click **`Instalar.cmd`**. It copies the app to
+   `%LOCALAPPDATA%\Programs\YT Mini Player`, adds Start menu and desktop shortcuts, and launches
+   it. No admin rights needed.
+3. To uninstall, run **`Desinstalar.cmd`**. Your session and settings are kept.
 
-El `.exe` no está firmado: la primera vez SmartScreen puede mostrar "Windows protegió su PC" →
-"Más información" → "Ejecutar de todas formas".
+The executable is not code-signed, so Windows SmartScreen may warn on first launch:
+click **More info → Run anyway**.
 
-## Uso
+**Requirements:** Windows 10 or 11 with the Microsoft Edge WebView2 Runtime (preinstalled on
+Windows 11). If it's missing, the app offers a download link.
 
-| Acción | Cómo |
+## Usage
+
+| Action | How |
 | --- | --- |
-| Mover | Arrastrar el video · Alt + arrastrar en cualquier punto · asa ⠿ de la barra |
-| Redimensionar | Arrastrar un borde (6 px) o una esquina (12 px) |
-| Barra de botones | Acercar el ratón al borde derecho |
-| Más opciones | Botón ⋯ de la barra |
-| Ocultar | Botón del ojo, Ctrl+H, o Ctrl+Alt+Y desde cualquier sitio |
-| Cerrar | Botón ×, Ctrl+Q, Alt+F4 o la bandeja → Salir |
+| Move | Drag the video · Alt + drag anywhere · the ⠿ grip in the toolbar |
+| Resize | Drag an edge (6 px) or a corner (12 px) |
+| Toolbar | Move the mouse to the right edge |
+| More options | The ⋯ button in the toolbar |
+| Hide | The eye button, Ctrl+H, or Ctrl+Alt+Y from anywhere |
+| Close | The × button, Ctrl+Q, Alt+F4, or tray → Salir |
 
-Un clic sin mover sobre el video sigue pausando y reproduciendo, como siempre.
+A plain click on the video still plays and pauses as usual.
 
-**Barra lateral:** mover, atrás, solo video, pantalla completa, siempre visible, ocultar, más, cerrar.
-Con la ventana baja (< 300 px) solo quedan los esenciales; el resto sigue en el menú ⋯.
+**Side toolbar:** move, back, video-only mode, fullscreen, always on top, hide, more options and
+close. In short windows (under 300 px) only the essentials remain; everything else is still in
+the ⋯ menu.
 
-**Menú ⋯:** tamaños S/M/L, esquinas, opacidad, modo fantasma, inicio de YouTube, abrir enlace
-copiado, extensiones, iniciar con Windows, atajos y salir.
+**⋯ menu:** size presets (S/M/L), snap to a screen corner, opacity, click-through ("ghost")
+mode, YouTube home, open a copied YouTube link, Chrome extensions, launch at startup, keyboard
+shortcuts and quit.
 
-**Bandeja del sistema:** clic izquierdo muestra u oculta; clic derecho abre un menú con siempre
-visible, modo fantasma, opacidad al 100 %, iniciar con Windows, carpeta de extensiones y salir.
+**Video-only mode:** on a watch page, the player fills the whole window and the YouTube header
+and page content are hidden.
 
-**Instancia única:** abrir el programa estando ya abierto (o escondido) lo trae al frente.
+**System tray:** left-click shows or hides the player; right-click opens a menu with always on
+top, ghost mode, reset opacity, launch at startup, the extensions folder and quit. While hidden,
+audio keeps playing and rendering and memory use are reduced.
 
-### Atajos
+**Single instance:** launching the app while it's already running (or hidden) brings the
+existing window to the front.
 
-Con la ventana activa (F1 los muestra en pantalla):
+### Keyboard shortcuts
 
-| Atajo | Acción |
+In the window (press F1 to see them on screen):
+
+| Shortcut | Action |
 | --- | --- |
-| F11 | Pantalla completa |
-| Ctrl+T | Siempre visible |
-| Ctrl+M | Solo video |
-| Ctrl+H | Ocultar en la bandeja |
-| Ctrl+L | Abrir el enlace de YouTube copiado |
-| Ctrl+1 / 2 / 3 | Tamaño pequeño / mediano / grande |
-| Ctrl+Shift+1 … 4 | Esquina ↖ ↗ ↙ ↘ |
-| Alt+Inicio | Inicio de YouTube |
-| Ctrl+Q | Salir |
+| F11 | Fullscreen |
+| Ctrl+T | Always on top |
+| Ctrl+M | Video-only mode |
+| Ctrl+H | Hide to tray |
+| Ctrl+L | Open the copied YouTube link |
+| Ctrl+1 / 2 / 3 | Small / medium / large |
+| Ctrl+Shift+1 … 4 | Snap to corner ↖ ↗ ↙ ↘ |
+| Alt+Home | YouTube home |
+| Ctrl+Q | Quit |
 
-En todo Windows, aunque esté oculto:
+System-wide, even when hidden:
 
-| Atajo | Acción |
+| Shortcut | Action |
 | --- | --- |
-| Ctrl+Alt+Y | Mostrar u ocultar |
-| Ctrl+Alt+P | Reproducir / pausar |
-| Ctrl+Alt+N / B | Siguiente / anterior |
-| Ctrl+Alt+G | Modo fantasma (los clics atraviesan la ventana) |
-| Ctrl+Alt+RePág / AvPág | Más / menos opacidad |
-| Ctrl+Alt+0 | Opacidad al 100 % |
+| Ctrl+Alt+Y | Show / hide |
+| Ctrl+Alt+P | Play / pause |
+| Ctrl+Alt+N / B | Next / previous |
+| Ctrl+Alt+G | Ghost mode (clicks pass through the window) |
+| Ctrl+Alt+PgUp / PgDn | Opacity up / down |
+| Ctrl+Alt+0 | Reset opacity to 100% |
 
-Se usan Ctrl+Alt + letras que no escriben símbolos con AltGr en las distribuciones española y
-latinoamericana, y se evitan Ctrl+Alt+flechas (algunos controladores Intel giran la pantalla).
-Si otro programa ya usa un atajo, la ayuda lo muestra tachado. Los atajos de YouTube (espacio,
-K, J, L, F, M…) siguen funcionando.
+Global shortcuts use Ctrl+Alt with letters that don't type symbols through AltGr on Spanish and
+Latin American layouts, and avoid Ctrl+Alt+arrows (some Intel drivers use them to rotate the
+screen). If another program already uses a shortcut, the help screen shows it struck through.
+YouTube's own shortcuts (Space, K, J, L, F, M…) keep working.
 
-### Extensiones de Chrome
+### Chrome extensions
 
-Menú ⋯ → Extensiones → **Abrir carpeta** (`%LOCALAPPDATA%\yt_mini_player\extensions`). Copia ahí:
+Open ⋯ → Extensiones → **Abrir carpeta** (`%LOCALAPPDATA%\yt_mini_player\extensions`) and drop in:
 
-- carpetas descomprimidas (con `manifest.json`, también si vienen dentro de una carpeta envolvente),
-- archivos `.crx` (versiones 2 y 3) o `.zip`: se descomprimen solos y el original se aparta a
-  `.archivos\`. Un `.crx` con el mismo nombre actualiza la extensión.
+- unpacked extension folders (with `manifest.json`, also when nested in a single wrapper folder),
+- `.crx` files (versions 2 and 3) or `.zip` files. They're extracted automatically and the
+  original is moved to `.archivos\`. A newer archive with the same name updates the extension.
 
-Pulsa **Recargar** y luego F5. Cada extensión se puede activar o desactivar y, si tiene página de
-opciones, abrirla. Si borras su carpeta, se desinstala al recargar.
+Click **Recargar**, then press F5. Each extension can be enabled or disabled from the menu, and
+its options page opened if it has one. Deleting an extension's folder uninstalls it on the next
+reload.
 
-Limitaciones de WebView2: no hay Chrome Web Store, ni barra de extensiones, ni sus ventanas
-emergentes; las extensiones Manifest V2 probablemente no carguen. Requiere un runtime de WebView2
-reciente (si no lo es, el menú lo indica).
+WebView2 limitations: no Chrome Web Store, no extension toolbar and no popup windows, so you need
+to obtain the `.crx`/`.zip` yourself (many extensions publish them on GitHub). Manifest V2
+extensions will likely not load. A recent WebView2 runtime is required; the menu says so if
+yours is too old.
 
-## Compilar
+## Building from source
 
-Requisitos: Rust estable y las **Build Tools de Visual Studio** con "Desarrollo para el escritorio
-con C++" (VS Code no basta: falta `link.exe`).
+Requirements: Rust (stable) and **Visual Studio Build Tools** with *Desktop development with
+C++*. VS Code alone is not enough: the build needs `link.exe`.
 
 ```powershell
-cargo run                                                 # debug, con consola para ver logs
-powershell -ExecutionPolicy Bypass -File tools\package.ps1 # release + dist\YT-Mini-Player-<v>-win64.zip
+cargo run                                                   # debug build with console logs
+powershell -ExecutionPolicy Bypass -File tools\package.ps1  # release zip in dist\
 ```
 
-Con MSVC el cargador de WebView2 queda dentro del `.exe`. El paquete precompilado se generó desde
-Linux con MinGW (target GNU) y por eso lleva `WebView2Loader.dll` al lado, que es redistribuible.
+MSVC builds link the WebView2 loader statically into the `.exe`. The prebuilt release zip was
+cross-compiled from Linux with MinGW (GNU target), so it ships the redistributable
+`WebView2Loader.dll` next to the executable.
 
-## Estructura
+## Project layout
 
-| Archivo | Contenido |
+| File | Contents |
 | --- | --- |
-| `src/main.rs` | Entrada, instancia única, bucle de eventos |
-| `src/app.rs` | Estado de la app y ejecución de todas las órdenes |
-| `src/ipc.rs` | Protocolo página → host (lista cerrada) y órdenes internas |
-| `src/window.rs` | Ventana sin bordes, icono, geometría restaurada |
-| `src/webview.rs` | WebView2 con perfil aislado, scripts inyectados, extensiones activadas |
-| `src/extensions.rs` | `.crx`/`.zip`, manifest, sincronización con el perfil de WebView2 |
-| `src/tray.rs` | Icono y menú de la bandeja |
-| `src/hotkeys.rs` | Atajos globales |
-| `src/platform.rs` | Win32: opacidad, clic a través, portapapeles, esquinas, inicio con Windows |
-| `src/links.rs` | Validación de enlaces de YouTube del portapapeles |
-| `src/config.rs` | Rutas, `settings.json`, `window.json`, `extensions.json` |
-| `src/lifecycle.rs` | Menos memoria y render al minimizar u ocultar |
-| `src/inject.js` | Arrastrar el video, Alt+arrastrar, bordes |
-| `src/ui.js` | Barra lateral, menú, ayuda, avisos, atajos locales, solo video |
-| `src/maintenance.js` | Recarga preventiva en sesiones largas |
-| `dist/` | Instalador (`install.ps1`, `Instalar.cmd`, `Desinstalar.cmd`, `LEEME.txt`) |
-| `tools/` | `measure.ps1` (memoria y CPU), `package.ps1` (empaquetar) |
+| `src/main.rs` | Entry point, single instance, event loop |
+| `src/app.rs` | App state and execution of every command |
+| `src/ipc.rs` | Page → host protocol (closed list) and internal commands |
+| `src/window.rs` | Borderless window, icon, restored geometry |
+| `src/webview.rs` | WebView2 with isolated profile, injected scripts, extensions enabled |
+| `src/extensions.rs` | `.crx`/`.zip` handling, manifests, sync with the WebView2 profile |
+| `src/tray.rs` | Tray icon and menu |
+| `src/hotkeys.rs` | Global shortcuts |
+| `src/platform.rs` | Win32: opacity, click-through, clipboard, corners, launch at startup |
+| `src/links.rs` | Validation of YouTube links from the clipboard |
+| `src/config.rs` | Paths, `settings.json`, `window.json`, `extensions.json` |
+| `src/lifecycle.rs` | Lower memory and rendering while minimized or hidden |
+| `src/inject.js` | Drag the video, Alt+drag, edge resizing |
+| `src/ui.js` | Toolbar, menu, help, toasts, local shortcuts, video-only mode |
+| `src/maintenance.js` | Preventive reload during long sessions |
+| `dist/` | Installer (`install.ps1`, `Instalar.cmd`, `Desinstalar.cmd`, `LEEME.txt`) |
+| `tools/` | `measure.ps1` (memory and CPU), `package.ps1` (packaging) |
 
-Datos del usuario en `%LOCALAPPDATA%\yt_mini_player`: `profile\` (sesión), `extensions\`,
-`settings.json`, `window.json`, `extensions.json`.
+User data lives in `%LOCALAPPDATA%\yt_mini_player`: `profile\` (session), `extensions\`,
+`settings.json`, `window.json` and `extensions.json`.
 
-## Pruebas
+## Tests
 
 ```powershell
-cargo test                               # protocolo, enlaces, extensiones, ajustes, esquinas
-node tests/inject.test.js                # arrastre y bordes, DOM simulado
-node tests/maintenance.test.js           # recarga preventiva, reloj simulado
-python tests/ui_e2e.py capturas          # interfaz completa en Chromium (pip install playwright)
+cargo test                               # protocol, links, extensions, settings, corners
+node tests/inject.test.js                # drag and edges, simulated DOM
+node tests/maintenance.test.js           # preventive reload, simulated clock
+python tests/ui_e2e.py screenshots       # full UI in Chromium (pip install playwright)
 powershell -ExecutionPolicy Bypass -File tests\measure.test.ps1
 ```
 
-`ui_e2e.py` carga una página que imita el reproductor de YouTube con la política Trusted Types
-real y comprueba 40 comportamientos: barra, menú, arrastre sin pausar, atajos, solo video,
-pantalla completa y ausencia de errores.
+`ui_e2e.py` loads a page that mimics YouTube's player under its real Trusted Types policy and
+checks 40 behaviors: toolbar, menu, dragging without pausing, shortcuts, video-only mode,
+fullscreen and no console errors.
 
-Pruebas manuales pendientes en Windows real:
+Manual checks still pending on real Windows:
 
-- [ ] Arrastrar el video mueve la ventana y no lo pausa ni lo deja a 2x.
-- [ ] Ocultar con el ojo y volver con Ctrl+Alt+Y o la bandeja; el audio sigue sonando oculto.
-- [ ] Pantalla completa (F11 o el botón de YouTube) ocupa el monitor; Esc vuelve al tamaño anterior.
-- [ ] Opacidad 70 % se ve translúcida (no negra); modo fantasma deja pasar los clics.
-- [ ] Una extensión `.crx` aparece en el menú y funciona tras F5.
-- [ ] Iniciar con Windows arranca oculto en la bandeja.
+- [ ] Dragging the video moves the window without pausing it or leaving it at 2x speed.
+- [ ] Hide with the eye button and bring it back with Ctrl+Alt+Y or the tray; audio keeps playing while hidden.
+- [ ] Fullscreen (F11 or YouTube's button) fills the monitor; Esc restores the previous size.
+- [ ] 70% opacity looks translucent (not black); ghost mode lets clicks through.
+- [ ] A `.crx` extension shows up in the menu and works after F5.
+- [ ] Launch at startup starts hidden in the tray.
 
-## Problemas conocidos
+## Known issues
 
-- Google puede bloquear el inicio de sesión en webviews pese al User-Agent (sección 8.1 de la propuesta).
-- **Opacidad y modo fantasma son experimentales:** usan una ventana *layered* de Win32 y no está
-  verificado cómo se combina con el render de WebView2. Si la ventana se ve negra, Ctrl+Alt+0 o la
-  bandeja → "Opacidad al 100 %" lo restablecen.
-- Solo video y la detección de "superficie de video" dependen de la estructura de la página de
-  YouTube; si YouTube la cambia, puede requerir ajustes en `ui.js` / `inject.js`.
-- La página de opciones de una extensión se abre en la misma ventana (Alt+← para volver).
-- La franja derecha de redimensionado se solapa con parte de la barra de desplazamiento.
-- La recarga preventiva pierde la cola temporal ("Añadir a la cola").
+- Google may block sign-in inside embedded webviews despite the user-agent override.
+- **Opacity and ghost mode are experimental.** They rely on a Win32 layered window, and how that
+  combines with WebView2 rendering hasn't been verified. If the window turns black, Ctrl+Alt+0
+  or tray → "Opacidad al 100 %" restores it.
+- Video-only mode and drag detection depend on YouTube's page structure and may need updates
+  in `ui.js` / `inject.js` if YouTube changes it.
+- An extension's options page opens in the same window (Alt+← to go back).
+- The right-edge resize strip overlaps part of the page scrollbar.
+- The preventive reload drops the temporary "Add to queue" list (playlists are kept).
