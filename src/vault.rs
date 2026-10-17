@@ -44,8 +44,9 @@ const DATA_MAGIC: &[u8; 4] = b"YTV1";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
-/// Ningún archivo de la app se acerca a esto; más grande = corrupto.
-const MAX_FILE: u64 = 4 * 1024 * 1024;
+/// Ningún archivo de la app se acerca a esto (la biblioteca de música más
+/// grande ronda unos pocos MB); más grande = corrupto.
+const MAX_FILE: u64 = 64 * 1024 * 1024;
 
 /// Quien envuelve la clave de datos (DPAPI en Windows).
 pub trait Protector {

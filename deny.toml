@@ -7,6 +7,11 @@ targets = [{ triple = "x86_64-pc-windows-msvc" }]
 # Cualquier aviso de seguridad de RustSec hace fallar la comprobación.
 version = 2
 yanked = "deny"
+ignore = [
+    # `paste` (lo usa lofty) es una macro que solo corre al compilar; está
+    # "sin mantenimiento" pero no tiene ninguna vulnerabilidad conocida.
+    { id = "RUSTSEC-2024-0436", reason = "macro de compilación sin código en el ejecutable; sin vulnerabilidades" },
+]
 
 [licenses]
 version = 2

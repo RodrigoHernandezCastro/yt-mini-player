@@ -135,6 +135,8 @@ pub enum Command {
     PinChecked(bool),
     PinHashed(Result<String, String>),
     BrowsingDataCleared(bool),
+    // Mi música (solo desde la página https://ytmp.localhost/music)
+    Music(crate::music::Request),
 }
 
 /// Opacidad mínima: por debajo la ventana es prácticamente invisible y el
@@ -213,6 +215,12 @@ pub fn parse_mini(message: &str) -> Option<Command> {
     })
 }
 
+/// Mensajes de la página "Mi música" (`music:...`). El webview solo los
+/// acepta si vienen de esa página (ver webview.rs).
+pub fn parse_music(message: &str) -> Option<Command> {
+    crate::music::Request::parse(message.strip_prefix("music:")?).map(Command::Music)
+}
+
 /// Mensajes de la pantalla de bloqueo (otra lista cerrada, otro webview).
 pub fn parse_lock(message: &str) -> Option<Command> {
     let pin = |p: &str| (!p.is_empty() && p.chars().count() <= crate::lock::PIN_MAX).then(|| p.to_owned());
@@ -254,6 +262,8 @@ pub fn is_extension_id(id: &str) -> bool {
 pub enum UserEvent {
     Command(Command),
     Extension(crate::extensions::ExtensionEvent),
+    /// Aviso del servicio de música para su página (JSON).
+    Music(String),
 }
 
 #[cfg(test)]
@@ -335,6 +345,19 @@ mod tests {
         for msg in ["lock:hello", "lock:pin:482915", "lock:cancel"] {
             assert_eq!(parse(msg), None, "{msg}");
             assert_eq!(parse_mini(msg), None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn music_protocol_is_separate() {
+        assert_eq!(parse_music("music:ready"), Some(Command::Music(crate::music::Request::Ready)));
+        assert_eq!(parse_music("ready"), None);
+        assert_eq!(parse_music("music:borrar-todo"), None);
+        // La página normal, la barra y el bloqueo no lo entienden.
+        for msg in ["music:ready", "music:pick-folder", "music:buy:lifetime"] {
+            assert_eq!(parse(msg), None, "{msg}");
+            assert_eq!(parse_mini(msg), None, "{msg}");
+            assert_eq!(parse_lock(msg), None, "{msg}");
         }
     }
 

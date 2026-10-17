@@ -19,7 +19,8 @@
 
   if (window.top !== window || window.__ytmpMediaInstalled) return;
   Object.defineProperty(window, '__ytmpMediaInstalled', { value: true });
-  if (location.hostname === 'ytmp.localhost') return;
+  // En las páginas propias, solo "Mi música" reproduce algo.
+  if (location.hostname === 'ytmp.localhost' && location.pathname !== '/music') return;
 
   // Netflix interrumpe la reproducción (error M7375) si se cambia
   // currentTime desde fuera; ahí solo se busca con sus propios controles.

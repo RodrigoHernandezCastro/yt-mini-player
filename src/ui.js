@@ -17,7 +17,7 @@
 
   const IS_YOUTUBE = /(^|\.)youtube\.com$/.test(location.hostname);
   // Pantalla de inicio de la app (selector de servicios).
-  const IS_HOME = location.hostname === 'ytmp.localhost';
+  const IS_HOME = location.hostname === 'ytmp.localhost' && location.pathname === '/';
   const REVEAL_ZONE = 64;   // px desde el borde derecho que muestran la barra
   const HIDE_DELAY = 1200;  // ms antes de ocultarla al alejarse
   const TOAST_MS = 3500;

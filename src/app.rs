@@ -135,6 +135,9 @@ pub struct App {
     /// PIN olvidado sin Windows Hello: se quita cuando el borrado de las
     /// sesiones termine bien (no antes).
     pin_reset_pending: bool,
+
+    /// Servicio de "Mi música" (biblioteca, descargas, licencias).
+    music: Option<crate::music::Handle>,
 }
 
 /// Estado que se envía a la página (barra lateral y menú).
@@ -178,6 +181,7 @@ pub struct Startup {
     pub vault_reset: bool,
     pub extension_ids: ExtensionIds,
     pub allowed_extensions: Arc<Mutex<Vec<String>>>,
+    pub music: Option<crate::music::Handle>,
 }
 
 /// Tras un doble clic en la bandeja llega otro clic suelto: se ignora.
@@ -250,6 +254,7 @@ impl App {
             last_external: None,
             approvals_pending: false,
             pin_reset_pending: false,
+            music: s.music,
         };
 
         // "Siempre visible" se aplica después de crear el webview: con
@@ -302,7 +307,23 @@ impl App {
                 self.on_extension(event);
                 true
             }
+            UserEvent::Music(json) => {
+                self.push_music(&json);
+                true
+            }
         }
+    }
+
+    /// Envía un aviso del servicio de música a su página. La comprobación de
+    /// la dirección va en el propio script: si en ese instante la ventana
+    /// muestra otro sitio, no recibe nada (ni puede imitar la función).
+    fn push_music(&self, json: &str) {
+        let script = format!(
+            "location.origin === 'https://ytmp.localhost' && location.pathname === '/music' \
+             && window.__ytmpMusic && window.__ytmpMusic(\"{}\", {json})",
+            self.keys.host
+        );
+        let _ = self.webview.evaluate_script(&script);
     }
 
     /// Minimizar y restaurar llegan como `Resized`.
@@ -660,6 +681,7 @@ impl App {
                     self.toast("No se pudieron borrar los datos (actualiza Microsoft Edge WebView2)");
                 }
             }
+            Command::Music(request) => self.on_music(request),
             Command::ToggleAutostart => {
                 let wanted = !self.autostart;
                 match platform::set_autostart(wanted) {
@@ -993,7 +1015,28 @@ impl App {
     /// tao termina el proceso con `exit()` sin ejecutar destructores, así
     /// que aquí se guarda todo y se quita el icono de la bandeja (si no,
     /// quedaría un icono fantasma hasta pasar el ratón por encima).
+    fn on_music(&mut self, request: crate::music::Request) {
+        use crate::music::{os, Request};
+        let Some(music) = &self.music else {
+            self.toast("La música no está disponible");
+            return;
+        };
+        match request {
+            // El diálogo del sistema va en el hilo de la ventana (modal).
+            Request::PickFolder => {
+                if let Some(path) = os::pick_folder(self.hwnd(), "Elige la carpeta con tu música") {
+                    music.request(Request::Import(path));
+                }
+            }
+            other => music.request(other),
+        }
+    }
+
     fn save_on_exit(&mut self) {
+        // La biblioteca se guarda (y las descargas se detienen) antes de salir.
+        if let Some(music) = &self.music {
+            music.shutdown(Duration::from_secs(3));
+        }
         if !self.fullscreen {
             if let Some(geometry) = app_window::current_geometry(&self.window) {
                 if let Err(err) = geometry.save(&self.store, &self.paths.window_state) {
@@ -1499,12 +1542,13 @@ impl App {
             "Contraseñas: la app no las ve ni las guarda. Inicias sesión en la página de cada servicio y el \
              guardado de contraseñas y el autorrelleno del motor están desactivados.\n\n\
              Sesiones (cookies): cifradas por WebView2 con AES-256-GCM; la clave, protegida por Windows (DPAPI).\n\n\
-             Datos de la app (ajustes, PIN, extensiones aprobadas): bóveda AES-256-GCM; su clave está protegida por {key}.\n\n\
+             Datos de la app (ajustes, PIN, extensiones aprobadas{music}): bóveda AES-256-GCM; su clave está protegida por {key}.\n\n\
              Disco: para cifrar el disco entero (caché incluida), activa BitLocker o el cifrado del dispositivo de Windows.{efs}\n\n\
              Bloqueo: {lock}.\n\n\
              Navegación: SmartScreen activo; descargas, ventanas emergentes y permisos (cámara, micrófono, \
              ubicación…) bloqueados; solo https (http únicamente en tu red local){overlay}.\n\n\
              Extensiones aprobadas: {approved}.",
+            music = if self.music.is_some() { ", biblioteca de música, licencia" } else { "" },
             key = match crate::vault::key_protection(&self.paths.vault_key) {
                 Some(crate::vault::KeyProtection::DeviceAndAccount) => {
                     "el chip de seguridad del equipo (TPM) y tu cuenta de Windows: no se puede abrir en otro equipo"

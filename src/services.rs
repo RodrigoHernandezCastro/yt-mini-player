@@ -131,6 +131,21 @@ pub const SERVICES: &[Service] = &[
     },
 ];
 
+/// "Mi música": la biblioteca propia (página de la app, no un sitio).
+pub const MUSIC_ID: &str = "music";
+pub const MUSIC_URL: &str = "https://ytmp.localhost/music";
+pub const MUSIC: Service = Service {
+    id: MUSIC_ID,
+    name: "Mi música",
+    caption: "Tu biblioteca, playlists y descargas",
+    url: MUSIC_URL,
+    domains: &[],
+    drm: false,
+    agent: Agent::Chrome,
+    accent: "#c2b3ff",
+    music: true,
+};
+
 /// Sitios de música que no están en el menú pero se pueden abrir con
 /// "Otro sitio": también tienen barra de música.
 const OTHER_MUSIC_SITES: &[(&str, &str)] = &[
@@ -152,6 +167,10 @@ pub fn music_source(host: &str) -> Option<&'static str> {
     if host.is_empty() {
         return None;
     }
+    // En nuestro host solo informa de medios la página de música.
+    if host == HOME_HOST {
+        return Some(MUSIC.name);
+    }
     let url = Url::parse(&format!("https://{host}/")).ok()?;
     match for_url(&url) {
         Some(service) if service.music => Some(service.name),
@@ -163,7 +182,7 @@ pub fn music_source(host: &str) -> Option<&'static str> {
 }
 
 pub fn by_id(id: &str) -> Option<&'static Service> {
-    SERVICES.iter().find(|s| s.id == id)
+    SERVICES.iter().find(|s| s.id == id).or((id == MUSIC_ID).then_some(&MUSIC))
 }
 
 /// Servicio al que pertenece una URL. Se elige el dominio más específico
@@ -280,8 +299,9 @@ mod tests {
         assert_eq!(music_source("open.spotify.com"), Some("Spotify"));
         assert_eq!(music_source("m.soundcloud.com"), Some("SoundCloud"));
         assert_eq!(music_source("www.deezer.com"), Some("Deezer"));
+        assert_eq!(music_source("ytmp.localhost"), Some("Mi música"));
         for not_music in ["www.youtube.com", "youtube.com", "www.netflix.com", "www.twitch.tv", "spotify.com.evil.com",
-                          "notspotify.com", "", "ytmp.localhost", "con espacios"] {
+                          "notspotify.com", "", "ytmp.localhost.evil.com", "con espacios"] {
             assert_eq!(music_source(not_music), None, "{not_music}");
         }
         // En el catálogo, solo YouTube Music por ahora.
@@ -325,5 +345,8 @@ mod tests {
         }
         assert!(by_id("netflix").is_some());
         assert!(by_id("nope").is_none());
+        assert_eq!(by_id("music").map(|s| s.url), Some(MUSIC_URL));
+        assert!(is_service_id(MUSIC_ID));
+        assert!(SERVICES.iter().all(|s| s.id != MUSIC_ID));
     }
 }

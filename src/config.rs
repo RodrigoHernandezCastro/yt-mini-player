@@ -80,8 +80,8 @@ fn load_legacy_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-/// Archivos de estado cifrados con la bóveda. Se puede clonar (la clave se
-/// ata al TPM desde otro hilo).
+/// Archivos de estado cifrados con la bóveda. Se puede clonar: la música
+/// guarda su biblioteca desde su propio hilo con la misma clave.
 #[derive(Clone)]
 pub struct Store {
     vault: Arc<Vault>,

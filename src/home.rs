@@ -1,24 +1,29 @@
-//! Pantalla de inicio: elegir servicio.
+//! Páginas propias de la app, servidas por el protocolo `ytmp` (en Windows,
+//! `https://ytmp.localhost/`):
+//! - `/`      pantalla de inicio (elegir servicio),
+//! - `/music` "Mi música" (y sus canciones y portadas, ver music::serve),
+//! - `/mini`  barra de música, `/lock` pantalla de bloqueo.
 //!
-//! Se sirve desde el protocolo propio `ytmp` (en Windows,
-//! `https://ytmp.localhost/`) con los datos incrustados al servirla, así que
-//! se dibuja completa desde el primer momento.
+//! Los datos van incrustados al servirlas, así que se dibujan completas desde
+//! el primer momento.
 
 use std::{
     borrow::Cow,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use serde::Serialize;
 use http::{header, Request, Response, StatusCode};
 
-use crate::services::SERVICES;
+use crate::services::{MUSIC, SERVICES};
 
 const TEMPLATE: &str = include_str!("home.html");
 /// Barra de música (ver mini.rs).
 const MINI: &str = include_str!("mini.html");
 /// Pantalla de bloqueo (ver lock.rs).
 const LOCK: &str = include_str!("lock.html");
+/// Mi música (ver music/).
+const MUSIC_PAGE: &str = include_str!("music.html");
 const PLACEHOLDER: &str = "__YTMP_DATA__";
 
 /// Política de seguridad de la página: nada externo, solo su propio script
@@ -54,8 +59,50 @@ struct ServiceView {
 struct HomeData<'a> {
     version: &'static str,
     services: Vec<ServiceView>,
+    music: ServiceView,
     last_service: Option<&'a str>,
     start_with_last: bool,
+}
+
+/// "Mi música": su script en línea se autoriza por su hash (más estricto que
+/// 'unsafe-inline': ningún otro script en línea podría ejecutarse aunque se
+/// colara en la página). Canciones y portadas: del propio host; vistas
+/// previas y miniaturas: del Internet Archive.
+fn music_csp() -> &'static str {
+    static CSP: OnceLock<String> = OnceLock::new();
+    CSP.get_or_init(|| {
+        format!(
+            "default-src 'none'; script-src '{}'; style-src 'unsafe-inline'; \
+             img-src 'self' data: https://archive.org https://*.archive.org; \
+             media-src 'self' https://archive.org https://*.archive.org; \
+             base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            script_hash(MUSIC_PAGE)
+        )
+    })
+}
+
+/// `sha256-…` del último `<script>` en línea de la página.
+pub fn script_hash(html: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use sha2::{Digest, Sha256};
+    let start = html.rfind("<script>").map(|i| i + "<script>".len()).unwrap_or(0);
+    let end = html.rfind("</script>").filter(|&e| e >= start).unwrap_or(start);
+    format!("sha256-{}", STANDARD.encode(Sha256::digest(&html.as_bytes()[start..end])))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MusicData {
+    version: &'static str,
+    media_key: Option<String>,
+}
+
+pub fn render_music() -> String {
+    let data = MusicData {
+        version: env!("CARGO_PKG_VERSION"),
+        media_key: crate::music::serve::shared().map(|s| s.key().to_owned()),
+    };
+    MUSIC_PAGE.replacen(PLACEHOLDER, &json_for_script(&data), 1)
 }
 
 /// HTML final con los datos en un `<script type="application/json">`.
@@ -66,6 +113,7 @@ pub fn render(state: &HomeState) -> String {
             .iter()
             .map(|s| ServiceView { id: s.id, name: s.name, caption: s.caption, accent: s.accent, drm: s.drm })
             .collect(),
+        music: ServiceView { id: MUSIC.id, name: MUSIC.name, caption: MUSIC.caption, accent: MUSIC.accent, drm: false },
         last_service: state.last_service.as_deref(),
         start_with_last: state.start_with_last,
     };
@@ -84,14 +132,19 @@ fn json_for_script<T: Serialize>(value: &T) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-/// Manejador del protocolo `ytmp`: la pantalla de inicio (`/`) y el mini
-/// controlador (`/mini`). Nada más.
+/// Manejador del protocolo `ytmp`: las páginas propias y, para "Mi
+/// música", sus canciones y portadas. Nada más.
 pub fn respond(request: &Request<Vec<u8>>, state: &SharedHomeState) -> Response<Cow<'static, [u8]>> {
-    let (body, csp) = match request.uri().path() {
+    let uri = request.uri();
+    if let Some(response) = crate::music::serve::respond(uri.path(), uri.query(), request.headers()) {
+        return response;
+    }
+    let (body, csp) = match uri.path() {
         "/" | "" => {
             let snapshot = state.lock().map(|s| s.clone()).unwrap_or_default();
             (Cow::Owned(render(&snapshot).into_bytes()), CSP)
         }
+        "/music" => (Cow::Owned(render_music().into_bytes()), music_csp()),
         "/mini" => (Cow::Borrowed(MINI.as_bytes()), MINI_CSP),
         "/lock" => (Cow::Borrowed(LOCK.as_bytes()), CSP),
         _ => {
@@ -110,6 +163,7 @@ pub fn respond(request: &Request<Vec<u8>>, state: &SharedHomeState) -> Response<
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .header("Cross-Origin-Opener-Policy", "same-origin")
+        .header("X-Frame-Options", "DENY")
         .body(body)
         .expect("respuesta 200 válida")
 }
@@ -136,6 +190,32 @@ mod tests {
         assert_eq!(data["services"][2]["drm"], true);
         assert_eq!(data["lastService"], "netflix");
         assert_eq!(data["startWithLast"], true);
+        assert_eq!(data["music"]["id"], "music");
+        assert_eq!(data["music"]["name"], "Mi música");
+    }
+
+    #[test]
+    fn music_page_allows_only_its_own_script() {
+        let state = SharedHomeState::default();
+        let res = respond(&Request::get("ytmp://localhost/music").body(Vec::new()).unwrap(), &state);
+        assert_eq!(res.status(), StatusCode::OK);
+        let csp = res.headers()["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains(&format!("script-src '{}'", script_hash(MUSIC_PAGE))), "{csp}");
+        assert!(!csp.contains("unsafe-inline';") || !csp.contains("script-src 'unsafe-inline'"));
+        assert!(csp.contains("media-src 'self' https://archive.org https://*.archive.org"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+        assert_eq!(res.headers()["x-frame-options"], "DENY");
+        let html = String::from_utf8_lossy(res.body()).into_owned();
+        assert!(html.contains("ytmp:music") && !html.contains(PLACEHOLDER));
+        // El hash es el del script de verdad.
+        assert!(script_hash("<p><script>abc</script>").ends_with(&{
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            use sha2::{Digest, Sha256};
+            STANDARD.encode(Sha256::digest(b"abc"))
+        }));
+        // Canciones sin la clave: prohibido (o no hay servicio en las pruebas).
+        let media = respond(&Request::get("ytmp://localhost/media/0123456789abcdef").body(Vec::new()).unwrap(), &state);
+        assert!(matches!(media.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND));
     }
 
     #[test]

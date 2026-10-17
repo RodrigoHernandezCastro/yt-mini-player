@@ -76,6 +76,14 @@ pub fn bundle(post_expr: &str, keys: &Keys) -> String {
   if (window.top === window && location.origin === 'https://ytmp.localhost') {{
     Object.defineProperty(window, '__ytmpHomeSend', {{ value: __ytmpSend }});
   }}
+  // "Mi música": la app le envía su estado (biblioteca, descargas...).
+  if (window.top === window && location.origin === 'https://ytmp.localhost' && location.pathname === '/music') {{
+    Object.defineProperty(window, '__ytmpMusic', {{
+      value: (key, message) => {{
+        if (key === __ytmpHostKey) window.dispatchEvent(new CustomEvent('ytmp:music', {{ detail: message }}));
+      }},
+    }});
+  }}
 {MEDIA_JS}
 {INJECT_JS}
 {UI_JS}
@@ -83,6 +91,11 @@ pub fn bundle(post_expr: &str, keys: &Keys) -> String {
         ipc = keys.ipc,
         host = keys.host,
     )
+}
+
+/// ¿El mensaje viene de la página "Mi música"?
+pub fn is_music_page(uri: &wry::http::Uri) -> bool {
+    uri.scheme_str() == Some("https") && uri.host() == Some(crate::services::HOME_HOST) && uri.path() == "/music"
 }
 
 /// Captura la función real de envío de WebView2 (solo en el marco principal).
@@ -119,10 +132,27 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
         // cada script se protegen comprobando `window.top`.
         .with_initialization_script(bundle(POST_EXPR, &keys))
         .with_initialization_script(MAINTENANCE_JS)
-        .with_custom_protocol(HOME_PROTOCOL.into(), move |_id, request| home::respond(&request, &home_state))
+        // Asíncrono: las canciones se leen del disco en otro hilo.
+        .with_asynchronous_custom_protocol(HOME_PROTOCOL.into(), move |_id, request, responder| {
+            if request.uri().path().starts_with("/media/") {
+                let home_state = home_state.clone();
+                std::thread::spawn(move || responder.respond(home::respond(&request, &home_state)));
+            } else {
+                responder.respond(home::respond(&request, &home_state));
+            }
+        })
         .with_ipc_handler(move |request: Request<String>| {
             // Sin el token de esta sesión, el mensaje lo escribió la página.
             let Some(message) = policy::authenticate(request.body(), &token) else { return };
+            if message.starts_with("music:") {
+                // Solo nuestra página de música puede usar su protocolo.
+                if is_music_page(request.uri()) {
+                    if let Some(command) = ipc::parse_music(message) {
+                        let _ = ipc_proxy.send_event(UserEvent::Command(command));
+                    }
+                }
+                return;
+            }
             if let Some(command) = ipc::parse(message) {
                 // Solo falla si el bucle de eventos ya terminó.
                 let _ = ipc_proxy.send_event(UserEvent::Command(command));
@@ -313,6 +343,18 @@ mod tests {
         assert_eq!(js.matches(&keys.host).count(), 1);
         assert!(!js.contains("window.ipc.postMessage"), "ningún script usa el canal sin token");
         assert!(!js.contains("window.__ytmpStartDrag"));
+        assert!(js.contains("location.pathname === '/music'"), "el puente de música solo existe en su página");
+    }
+
+    #[test]
+    fn music_messages_only_from_the_music_page() {
+        let uri = |s: &str| s.parse::<wry::http::Uri>().unwrap();
+        assert!(is_music_page(&uri("https://ytmp.localhost/music")));
+        assert!(is_music_page(&uri("https://ytmp.localhost/music?x=1")));
+        for other in ["https://ytmp.localhost/", "https://ytmp.localhost/music/x", "https://www.youtube.com/music",
+                      "http://ytmp.localhost/music", "https://ytmp.localhost.evil.com/music"] {
+            assert!(!is_music_page(&uri(other)), "{other}");
+        }
     }
 
     #[test]

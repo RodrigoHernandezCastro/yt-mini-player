@@ -123,6 +123,7 @@ def main():
         }}""")
         check(found == [], f"el token no es accesible desde la página ({found})")
         check(page.evaluate("typeof window.__ytmpHomeSend") == "undefined", "el canal de la pantalla de inicio no existe fuera de ella")
+        check(page.evaluate("typeof window.__ytmpMusic") == "undefined", "ni el puente de «Mi música» (biblioteca, rutas, licencia)")
         check(page.evaluate("typeof window.__ytmpStartDrag") == "undefined", "arrastrar la ventana no está expuesto")
         check(not errors, f"sin errores en la página ({errors[:3]})")
         page.close()

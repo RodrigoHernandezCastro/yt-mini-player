@@ -68,6 +68,9 @@
   .channel:hover, .channel:focus-visible { background: #1a1f31; }
   .channel:hover::before, .channel:focus-visible::before { opacity: 1; }
   .channel:focus-visible { outline-offset: -2px; }
+  /* "Mi música": a lo ancho, debajo de los servicios. */
+  .channel.wide { grid-column: 1 / -1; background: linear-gradient(90deg, rgba(194, 179, 255, .07), transparent 60%); }
+  .channel.wide::before { opacity: .7; }
   .num {
     grid-row: 1 / span 2; font: 600 26px/1 var(--display); color: var(--dim);
     font-variant-numeric: tabular-nums; text-align: center;
@@ -162,12 +165,15 @@
     return { text: service.caption, warn: false };
   }
 
+  // Servicios (teclas 1–8) y, al final, "Mi música" (tecla 9).
+  const entries = () => (data.music ? data.services.concat([data.music]) : data.services);
+
   function render() {
     guide.replaceChildren();
     rows.clear();
-    data.services.forEach((service, i) => {
+    entries().forEach((service, i) => {
       const key = i + 1;
-      const row = el('button', 'channel');
+      const row = el('button', service === data.music ? 'channel wide' : 'channel');
       row.type = 'button';
       row.style.setProperty('--brand', service.accent);
       row.dataset.id = service.id;
@@ -191,13 +197,13 @@
     send('service:' + id);
   }
 
-  // Teclas 1–8 abren el servicio; no mientras se escribe una dirección.
+  // Teclas 1–9 abren el servicio; no mientras se escribe una dirección.
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
     if (e.target instanceof HTMLInputElement) return;
     const match = /^Digit([1-9])$/.exec(e.code) || /^Numpad([1-9])$/.exec(e.code);
     if (!match) return;
-    const service = data.services[Number(match[1]) - 1];
+    const service = entries()[Number(match[1]) - 1];
     if (!service) return;
     e.preventDefault();
     open(service.id);

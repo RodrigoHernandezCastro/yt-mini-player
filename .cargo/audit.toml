@@ -5,4 +5,7 @@ ignore = [
     # compilar para Linux (gtk, a través de wry/tao). El .exe no los incluye.
     "RUSTSEC-2024-0370",
     "RUSTSEC-2024-0429",
+    # paste (sin mantenimiento): macro de compilación que usa lofty; no hay
+    # código suyo en el ejecutable ni vulnerabilidades conocidas.
+    "RUSTSEC-2024-0436",
 ]

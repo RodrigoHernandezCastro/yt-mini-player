@@ -61,6 +61,7 @@ def home_html(last_service=None, start_with_last=False):
     data = {
         "version": "0.3.0",
         "services": [{"id": i, "name": n, "caption": c, "accent": a, "drm": d} for i, n, c, a, d in SERVICES],
+        "music": {"id": "music", "name": "Mi música", "caption": "Tu biblioteca, playlists y descargas", "accent": "#c2b3ff", "drm": False},
         "lastService": last_service,
         "startWithLast": start_with_last,
     }
@@ -109,7 +110,10 @@ def main():
         page.goto("https://ytmp.localhost/")
         page.wait_for_timeout(400)
         rows = page.locator(".channel")
-        check(rows.count() == 8, f"muestra los 8 servicios ({rows.count()})")
+        check(rows.count() == 9, f"muestra los 8 servicios y Mi música ({rows.count()})")
+        music_row = page.locator(".channel[data-id='music']")
+        check(music_row.count() == 1 and "wide" in (music_row.get_attribute("class") or ""), "Mi música va a lo ancho, al final")
+        check(music_row.inner_text().startswith("9"), "con la tecla 9")
         check(rows.nth(2).inner_text().startswith("3"), "cada fila lleva su número de tecla")
         check(page.locator(".channel[data-id='crunchyroll'] .last").count() == 1, "marca el último servicio usado")
         shot(page, "1-inicio")
@@ -122,6 +126,10 @@ def main():
         clear(page)
         page.keyboard.press("4")
         check(sent(page) == ["service:crunchyroll"], f"la tecla 4 abre Crunchyroll ({sent(page)})")
+
+        clear(page)
+        page.keyboard.press("9")
+        check(sent(page) == ["service:music"], f"la tecla 9 abre Mi música ({sent(page)})")
 
         clear(page)
         page.click("#site-url")

@@ -12,9 +12,12 @@ mod ipc;
 mod lifecycle;
 mod links;
 mod lock;
+mod license;
 mod lockview;
 mod media;
 mod mini;
+mod music;
+mod net;
 mod platform;
 mod policy;
 mod security;
@@ -121,6 +124,23 @@ fn run() -> Result<(), Box<dyn Error>> {
         start_with_last: settings.start_with_last,
     }));
 
+    // Mi música: un hilo propio con la biblioteca, las descargas y la licencia.
+    let music_proxy = proxy.clone();
+    let music = music::start(
+        music::Config {
+            dir: paths.root.join("music"),
+            downloads: music::os::music_dir().map(|dir| dir.join(music::DOWNLOADS_FOLDER)),
+            store: store.clone(),
+            archive: music::archive::BASE.to_owned(),
+            license_api: license::API.to_owned(),
+            shop: license::StoreConfig::built_in(),
+            dev_unlock: license::dev_unlock(),
+        },
+        move |json| {
+            let _ = music_proxy.send_event(UserEvent::Music(json));
+        },
+    );
+
     let mut web_context = WebContext::new(Some(paths.profile.clone()));
     let webview = webview::build(
         &window,
@@ -159,6 +179,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         vault_reset: vault_state == vault::Opened::Replaced,
         extension_ids,
         allowed_extensions,
+        music: Some(music),
     });
 
     // `ControlFlow::Wait` deja el hilo dormido hasta que llega un mensaje:
