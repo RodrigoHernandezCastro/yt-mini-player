@@ -27,6 +27,16 @@ jobs:
           cargo audit --deny warnings
       - name: Compilar y empaquetar (normal + superposición máxima)
         shell: pwsh
+        # Tienda de Lemon Squeezy (variables del repositorio, no secretos:
+        # ids de tienda y producto y enlaces de pago son públicos). Sin
+        # ellas, los planes de pago quedan bloqueados en la app.
+        env:
+          YTMP_LS_STORE_ID: ${{ vars.YTMP_LS_STORE_ID }}
+          YTMP_LS_DOWNLOADS_PRODUCTS: ${{ vars.YTMP_LS_DOWNLOADS_PRODUCTS }}
+          YTMP_LS_LIFETIME_PRODUCTS: ${{ vars.YTMP_LS_LIFETIME_PRODUCTS }}
+          YTMP_LS_DOWNLOADS_CHECKOUT: ${{ vars.YTMP_LS_DOWNLOADS_CHECKOUT }}
+          YTMP_LS_LIFETIME_CHECKOUT: ${{ vars.YTMP_LS_LIFETIME_CHECKOUT }}
+          YTMP_LS_PORTAL: ${{ vars.YTMP_LS_PORTAL }}
         run: ./tools/package.ps1
       - name: Atestación de procedencia
         uses: actions/attest-build-provenance@v1

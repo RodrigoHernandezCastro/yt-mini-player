@@ -13,6 +13,16 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
+# Los planes de pago de "Mi música" necesitan los datos de la tienda (ver
+# README, "Selling the plans"). Sin ellos la compilación sale igual, con
+# las funciones de pago bloqueadas.
+if (-not $env:YTMP_LS_STORE_ID) {
+    Write-Warning 'YTMP_LS_STORE_ID no está definido: los planes de pago quedarán bloqueados en esta compilación.'
+}
+if ($env:YTMP_DEV_UNLOCK -eq '1') {
+    throw 'YTMP_DEV_UNLOCK=1 desbloquea todo: no se empaqueta una compilación de desarrollo.'
+}
+
 cargo build --release
 if ($LASTEXITCODE -ne 0) { throw 'La compilación falló.' }
 

@@ -5,12 +5,16 @@ Netflix, Crunchyroll and other services in a borderless floating window on top o
 WebView2 runtime, so you keep each site's full interface and your accounts without running a
 full browser.
 
+It also has **My music** (*Mi música*): a local music library and player with playlists,
+duplicate detection and downloads of openly licensed music from the Internet Archive, with
+optional paid plans sold through Lemon Squeezy.
+
 Built with Rust, [tao](https://crates.io/crates/tao) and [wry](https://crates.io/crates/wry).
-Version 0.6.1. The in-app interface is in Spanish.
+Version 0.7.0. The in-app interface is in Spanish.
 
 ## Install
 
-1. Download `YT-Mini-Player-0.6.1-win64.zip` from the Releases page and extract it anywhere.
+1. Download `YT-Mini-Player-0.7.0-win64.zip` from the Releases page and extract it anywhere.
 2. Pick one:
    - **`Instalar.cmd`** (normal): copies the app to `%LOCALAPPDATA%\Programs\YT Mini Player`,
      adds Start menu and desktop shortcuts, and launches it. No admin rights needed.
@@ -30,7 +34,7 @@ Windows 11). If it's missing, the app offers a download link.
 
 ## Usage
 
-The app opens on a **service picker**: press a number key (1–8) or click a row. To come back,
+The app opens on a **service picker**: press a number key (1–9) or click a row. To come back,
 use the house button in the toolbar, **Alt+Home**, or the tray menu → *Menú principal*.
 
 | # | Service | DRM |
@@ -43,6 +47,7 @@ use the house button in the toolbar, **Alt+Home**, or the tray menu → *Menú p
 | 6 | Disney+ | Yes |
 | 7 | HBO Max | Yes |
 | 8 | Twitch | No |
+| 9 | **Mi música** (your library, see [My music](#my-music)) | No |
 
 The picker also opens **any other site** (e.g. Plex or Jellyfin) from the address field, and can
 skip itself at startup ("Abrir el último al iniciar") to go straight to the last service used.
@@ -76,10 +81,23 @@ and quit.
 else on the page is hidden. While YouTube is in fullscreen, video-only mode steps aside.
 
 **Over fullscreen apps and games:** with "always on top" enabled, the normal install raises the
-player back above borderless/windowed-fullscreen games that mark themselves as topmost (instantly
-on focus changes, within ~¼ s otherwise), without stealing focus. It never covers the Start menu,
-Alt+Tab, the lock screen, screenshot tools or GPU overlays. For apps that still cover it, use the
-[maximum overlay](#maximum-overlay) install.
+player back above borderless/windowed-fullscreen games that mark themselves as topmost: instantly
+on focus and z-order changes, and every 15–100 ms while a game keeps re-asserting itself. It
+never covers the Start menu, Alt+Tab, the lock screen, screenshot tools or GPU overlays. For apps
+that still cover it, use the [maximum overlay](#maximum-overlay) install.
+
+**Game mode:** while a game (or any app) is fullscreen in front, **clicking the player doesn't
+take focus away from the game** (the window becomes non-activating for that time). Keyboard and
+focus stay with the game, so games that minimize or pause when they lose focus, like Minecraft
+and everything built on GLFW or SDL, keep running while you pause or seek the video. Use the
+global shortcuts (Ctrl+Alt+P, N, B…) for the keyboard. Alt+Tab back to the player to type in it.
+A game that minimizes itself when covered *while it's still in front* is treated as exclusive
+fullscreen and left alone; one that minimizes because you Alt+Tabbed away is covered again when
+you come back.
+
+**Minecraft (Java Edition):** F11 fullscreen works. If the video settings use a *Fullscreen
+Resolution* different from the desktop's, Windows switches display modes and may treat it as
+exclusive fullscreen; set it to *Current* (or play maximized in a window).
 
 **System tray:** left-click hides the player, or opens the music bar when it's already hidden;
 double-click shows it. Right-click opens a dark menu with what's playing, play/pause, previous,
@@ -167,13 +185,68 @@ fullscreen optimizations turned off) can't be covered by any window. Only overla
 the game's renderer (Steam, Discord) can do that, and this app deliberately doesn't inject code:
 anti-cheat systems treat it as cheating. Use borderless or windowed fullscreen in those games.
 
+### My music
+
+Key **9** on the picker (or the *Mi música* row) opens a music player for **your own files**,
+inside the same window and with the same music bar in the taskbar, tray controls and global
+shortcuts as any music service.
+
+- **Library:** *Carpeta* adds a folder (MP3, FLAC, M4A/AAC, Ogg, Opus, WAV). Files are read in
+  place, never copied: tags, duration, embedded cover art. Folders are re-checked when the page
+  opens (new and deleted files) and with ⟳. Search ignores accents and case; sort by recent,
+  title, artist or album; play all or shuffle. Each song's ⋯ menu: play next, add to a playlist,
+  show in folder, remove from the library, or send to the Recycle Bin.
+- **Player:** previous/next, seek, shuffle, repeat (all / one), volume, Space to play/pause,
+  Media Session (so the taskbar bar, tray and media keys show and control it).
+- **Duplicates** (*Duplicados*): finds the same song three ways and suggests keeping the best
+  copy (lossless, then bitrate, then size): **same file** (identical content), **same song**
+  (artist and title match once normalized: accents, "feat.", "(Remastered)", track numbers… and
+  the length is within 3 s) and **same audio** (an acoustic fingerprint, Chromaprint, the
+  algorithm behind AcoustID, matches even when the format or the tags differ). Nothing is deleted
+  without confirming, and only to the Recycle Bin. "No son iguales" hides a group for good.
+- **Download** (*Descargar*): search the [Internet Archive](https://archive.org) for music under
+  a license that allows keeping a copy: **Creative Commons BY, BY-SA, BY-ND, CC0 and public
+  domain**. *NonCommercial* (NC) licenses, audiobooks, radio and podcasts are filtered out (in the
+  query and again in the app). Preview any song online for free; with a plan, download single songs or a whole album
+  as a playlist, in compact MP3 or best quality (FLAC when there is one). Downloads go to
+  `Music\YT Mini Player\<artist>\<album>`, three at a time, resume if interrupted, and are
+  verified against the Archive's SHA-1. **Songs you already have are not downloaded again:**
+  before downloading (same Archive file, or same artist + title + length) and after (identical
+  content or same acoustic fingerprint: the copy is discarded and the playlist points to the
+  one you had). Each song keeps its license and author; credit them if you share the music.
+- **Plans:**
+
+  | Plan | Price | Includes | Playlists |
+  | --- | --- | --- | --- |
+  | Gratis | free | Library, player, folders, duplicates, searching and previewing free music | 2 |
+  | Descargas | 2 USD / month | + downloading songs and whole albums | 5 |
+  | De por vida | 10 USD once | everything, for good | unlimited |
+
+  *Plan* opens the checkout in your browser (Lemon Squeezy); paste the license key from the
+  receipt e-mail into *Activar*. *Desactivar en este equipo* frees the activation for another PC.
+
+  **Non-invasive by design:**
+  - No ads, no pop-ups, no "upgrade" dialogs. Limits are counts (2 / 5 / unlimited playlists),
+    shown where they apply: "2 de 2 playlists" next to *Nueva playlist*, and a one-line note
+    under the header (closed with ×) if you hit one.
+  - Nothing you made is taken away. If a subscription ends, extra playlists stay: you can still
+    play, edit and delete them; you just can't create new ones above the free limit. Downloaded
+    songs are yours.
+  - Without a download plan there are no download buttons: previews stay free, and the album view
+    just mentions the plans once.
+  - Almost no contact with the store, and no accounts or telemetry: the key is activated once,
+    then checked every 7 days (monthly plan, which can be cancelled) or every 30 days (lifetime,
+    in case of a refund). Offline, the monthly plan keeps working for 14 days; lifetime never
+    expires offline.
+
 ### Keyboard shortcuts
 
 In the window (press F1 to see them on screen):
 
 | Shortcut | Action |
 | --- | --- |
-| 1–8 | Open a service (on the main menu) |
+| 1–9 | Open a service or My music (on the main menu) |
+| Space | Play / pause (in My music) |
 | Alt+Home | Main menu |
 | F11 | Fullscreen |
 | Ctrl+T | Always on top |
@@ -242,9 +315,9 @@ yours is too old.
 - **The app's own data is in an encrypted vault** (`vault.rs`): envelope encryption, the same
   scheme as Chrome's `os_crypt`, Electron's `safeStorage` and Signal Desktop. A random 256-bit
   data key encrypts each file (settings, window position, extension ids and approvals, the PIN
-  hash) with **AES-256-GCM**; each file has a random nonce and is bound to its purpose, so a
-  modified or swapped file is rejected. The data key is wiped from memory after use (`zeroize`)
-  and is only stored wrapped twice:
+  hash, the music library and license) with **AES-256-GCM**; each file has a random nonce and is
+  bound to its purpose, so a modified or swapped file is rejected. The data key is wiped from
+  memory after use (`zeroize`) and is only stored wrapped twice:
   - by the computer's **security chip (TPM 2.0)**, through Windows' *Microsoft Platform Crypto
     Provider*: a non-exportable RSA-2048 key generated inside the TPM (OAEP padding), the way
     Windows Hello protects its keys. A copy of the disk can't be opened on another computer, even
@@ -309,6 +382,18 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
 - The start page, music bar and lock screen are served with a strict Content-Security-Policy,
   `no-referrer` and `X-Content-Type-Options: nosniff`, and the bar and lock screen can't navigate
   away from their page.
+- **My music:** its page only runs its own script (CSP with the script's SHA-256 hash, not
+  `unsafe-inline`), renders tags and titles as text only, and can't be framed. Its commands
+  (`music:…`) are a separate closed list accepted **only from that page's URL**, with sizes and
+  ids validated; the app pushes data to it only after checking, inside the page, that it is that
+  page. Songs and covers are served by id (never by a path from the URL) and require a random
+  per-session key, so another site open in the player can't read your files; cross-site requests
+  are refused. Library, fingerprints and license are stored in the encrypted vault.
+- **Network (My music):** HTTPS through Windows' own TLS stack (SChannel, TLS 1.2+, the system's
+  certificates; verification is never turned off), a descriptive User-Agent, few parallel
+  downloads and back-off with `Retry-After`, as the Internet Archive asks. Lemon Squeezy keys
+  are checked against **this store and these products** (the license API accepts keys from any
+  store).
 - **Maximum overlay** (UIAccess can send input to administrator windows): that process only
   opens the catalog services and their sign-in pages; no *Otro sitio*, no external links.
 
@@ -323,6 +408,55 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
 - The local "maximum overlay" certificate is code-signing only and not a CA, and its private key
   is deleted right after signing.
 
+## Selling the plans (Lemon Squeezy setup)
+
+Payments are handled by [Lemon Squeezy](https://www.lemonsqueezy.com) as merchant of record
+(checkout, taxes/VAT, receipts, refunds, the customer portal). The app only uses its public
+[License API](https://docs.lemonsqueezy.com/api/license-api) (activate, validate,
+deactivate). To connect your store:
+
+1. In Lemon Squeezy, create two products with **license keys enabled**:
+   - *Descargas*: subscription, 2 USD / month, activation limit e.g. 3.
+   - *De por vida*: single payment, 10 USD, activation limit e.g. 3, keys that never expire.
+   Subscription keys expire when the subscription ends; disabling a key (refund) blocks it.
+2. Note the **store id**, each product id (or variant id) and each product's **checkout URL**
+   (Share → checkout link), plus your customer portal URL if you want a *Gestionar suscripción*
+   button.
+3. Build with these environment variables (they're compiled in; none of them is secret):
+
+   ```powershell
+   $env:YTMP_LS_STORE_ID = '12345'
+   $env:YTMP_LS_DOWNLOADS_PRODUCTS = '111111'          # comma-separated product or variant ids
+   $env:YTMP_LS_LIFETIME_PRODUCTS = '222222'
+   $env:YTMP_LS_DOWNLOADS_CHECKOUT = 'https://<store>.lemonsqueezy.com/buy/<uuid>'
+   $env:YTMP_LS_LIFETIME_CHECKOUT = 'https://<store>.lemonsqueezy.com/buy/<uuid>'
+   $env:YTMP_LS_PORTAL = 'https://<store>.lemonsqueezy.com/billing'   # optional
+   powershell -ExecutionPolicy Bypass -File tools\package.ps1
+   ```
+
+   In GitHub, set the same names as repository **variables**; `release.yml` passes them to the
+   build. Without them the paid features stay locked and the *Plan* tab says the store isn't
+   configured. `YTMP_DEV_UNLOCK=1` unlocks everything for development (with a red banner);
+   never ship that build.
+4. Test with Lemon Squeezy's test mode first: buy, activate, cancel the subscription, refund.
+
+What to check before selling (not legal advice):
+
+- **Internet Archive:** its [terms of use](https://archive.org/about/terms.php) say access to
+  the collections is provided free of charge for scholarship and research purposes. The app only searches and
+  downloads on the user's request, never mirrors or bulk-crawls, and only offers items whose
+  license allows copying, but you sell access to a feature that relies on the Archive: read the
+  terms yourself, and consider contacting them. Per-item licenses are set by uploaders and can be
+  wrong; the app shows each item's license and author and links to it.
+- The paid plans unlock **features of the app** (downloading, playlists), not the music: the
+  music itself is free under its license. Say so on your product page.
+- Jamendo, Spotify and YouTube are deliberately **not** download sources: Jamendo's API terms
+  forbid offline caching for apps and require a commercial agreement, Spotify is DRM-protected,
+  and downloading from YouTube breaks its terms of service.
+- License checks run in the client, so a determined user can patch them out of an open-source
+  build. That's the usual trade-off for desktop apps; the server side (Lemon Squeezy) is what
+  controls refunds and subscriptions.
+
 ## Building from source
 
 Requirements: Rust (stable) and **Visual Studio Build Tools** with *Desktop development with
@@ -333,6 +467,8 @@ cargo run                                                   # debug build with c
 powershell -ExecutionPolicy Bypass -File tools\package.ps1  # both variants + release zip in dist\
 ```
 
+See [Selling the plans](#selling-the-plans-lemon-squeezy-setup) for the store variables.
+
 `YTMP_UIACCESS=1` builds the maximum-overlay variant (manifest with `uiAccess="true"`). That
 executable only starts once signed and installed under Program Files, so use the installer.
 
@@ -341,6 +477,24 @@ cross-compiled from Linux with MinGW (GNU target), so it ships the redistributab
 `WebView2Loader.dll` next to the executables.
 
 ## Changelog
+
+**0.7.0** — games and My music (includes 0.6.1)
+- Games: clicking the player while a fullscreen game is in front no longer takes focus from the
+  game ("game mode", `WS_EX_NOACTIVATE` + `MA_NOACTIVATE`), so Minecraft and other GLFW/SDL games
+  no longer minimize or pause. Before, that minimize also made the player think the game was
+  exclusive fullscreen and stop covering it; exclusive fullscreen is now detected by event order
+  (minimized while still in front), so Alt+Tab no longer counts. Instant reaction to z-order
+  changes (`EVENT_OBJECT_REORDER`) and faster polling while a game keeps re-asserting itself.
+- New: **My music** (key 9): local library (folders, tags, covers), player with shuffle/repeat
+  and Media Session, playlists, duplicate finder (identical file, same song, same audio via
+  Chromaprint), and downloads of openly licensed music from the Internet Archive (single songs or
+  whole albums as playlists, resumable, SHA-1 verified, skipping songs you already have).
+- New: plans through Lemon Squeezy (*Descargas* 2 USD/month, *De por vida* 10 USD once), sold
+  without nagging: 2 / 5 / unlimited playlists, inline limits instead of dialogs, nothing taken
+  away when a plan ends, license checks every 7 or 30 days and offline grace (14 days monthly,
+  forever lifetime).
+- Security: closed `music:` protocol only from the music page, CSP by script hash, per-session
+  key for songs and covers, everything stored in the vault, HTTPS through SChannel.
 
 **0.6.1** — no more EFS prompt
 - The data folder is no longer encrypted with EFS, so Windows no longer asks to back up an
@@ -446,13 +600,18 @@ cross-compiled from Linux with MinGW (GNU target), so it ships the redistributab
 | `src/vault.rs` | Encrypted vault: AES-256-GCM, key wrapped by the TPM and DPAPI |
 | `src/lock.rs` · `src/lockview.rs` · `src/lock.html` | App lock: Windows Hello, Argon2id PIN, lock screen |
 | `src/policy.rs` | Navigation, new-window and IPC-token rules (pure, tested) |
+| `src/music.html` · `src/music/` | My music: page, service thread, library and duplicates, file scanning, acoustic fingerprint, Internet Archive, download queue, media/cover serving, Windows dialogs |
+| `src/license.rs` | Lemon Squeezy licenses: plans, activation, validation, offline grace |
+| `src/net.rs` | HTTPS client (SChannel), retries with `Retry-After`, resumable downloads |
 | `src/security.rs` | Removal of 0.6.0's EFS encryption, Windows lock/sleep notifications, system dialogs |
 | `build.rs` | Icon, version info and manifest (normal or UIAccess) |
 | `dist/` | Installer (`install.ps1`, `Instalar.cmd`, `Instalar-superposicion.cmd`, `Desinstalar.cmd`, `LEEME.txt`) |
 | `tools/` | `measure.ps1` (memory and CPU), `package.ps1` (packaging) |
 
 User data lives in `%LOCALAPPDATA%\yt_mini_player`: `profile\`
-(sessions for every service), `extensions\`, `vault.key` and the encrypted `*.enc` files.
+(sessions for every service), `extensions\`, `vault.key`, the encrypted `*.enc` files and
+`music\` (encrypted library, fingerprints and license, plus a cover cache). Downloaded songs go
+to `Music\YT Mini Player`; your own folders are only read.
 
 ## Tests
 
@@ -464,13 +623,14 @@ python tests/ui_e2e.py screenshots       # YouTube UI in Chromium (pip install p
 python tests/home_e2e.py screenshots     # service picker and a non-YouTube player
 python tests/mini_e2e.py screenshots     # music bar + media.js on a real <audio>
 python tests/security_e2e.py screenshots # hostile page vs. the app's scripts, lock screen
+python tests/music_e2e.py screenshots    # My music page with the app's real wrapper and CSP
 node tests/media.test.js                 # media.js with simulated Media Session and players
 powershell -ExecutionPolicy Bypass -File tests\measure.test.ps1
 ```
 
 `ui_e2e.py` loads a page that mimics YouTube's layout (fixed header, two columns, nested stacking
 contexts) under its real Trusted Types policy and checks 49 behaviors. `home_e2e.py` serves the
-picker with the app's real Content-Security-Policy and checks 33 behaviors: keys 1–8, the address
+picker with the app's real Content-Security-Policy and checks 36 behaviors: keys 1–9, the address
 field, the startup switch, the DRM check (both outcomes), small windows, and dragging, clicking
 and seeking on a generic streaming player. `mini_e2e.py` checks the music bar at taskbar sizes
 (360×40 for Windows 11, 360×32 for Windows 10, 48 px floating, and the narrow 250–280 px
@@ -481,7 +641,22 @@ layout; then it runs media.js against Chromium's real Media Session with a real 
 hooks WebView2's message function, fires synthetic keys and clicks, fakes toasts and searches for
 the token, and checks that none of it gets through; then it drives the lock screen (Hello, PIN,
 waits, new PIN, small windows). The browser tests inject exactly the wrapper `webview.rs` builds
-(`tests/bundle.py` reads it from the source).
+(`tests/bundle.py` reads it from the source). `music_e2e.py` serves the My music page with its
+hash-based CSP and drives it as the app would: library, filtering with accents, playback through
+`/media` with the session key, Media Session and media.js reports (taskbar bar), next/pause from
+the app, track menus, Recycle Bin confirmation, upsells, plan cards, license activation,
+Internet Archive search, album view, previews, album download, the download queue, duplicates,
+plan limits shown inline (never a dialog), playlists, a forged message without the key, and 480×270 / 256×144 windows (80 checks).
+
+The Rust tests include fake HTTP servers for the Internet Archive and Lemon Squeezy: searching,
+opening an album, downloading it as a playlist in parallel (with a song that turns out to be the
+same audio as another and is discarded), resuming with `Range`, rejecting a bad SHA-1,
+cancelling, activating/validating/deactivating keys from this store and from another one, expiry
+and offline grace. Fingerprint tests use synthesized audio (same melody at two sample rates vs.
+a different one). The topmost guard was also checked in Wine against fake games: one that
+re-asserts topmost every 30 ms, a GLFW-like one that minimizes on focus loss (click on the
+player, Alt+Tab and back) and an exclusive-fullscreen one; and the music service, built for
+Windows, was run in Wine (DPAPI vault, Windows paths, Recycle Bin, media serving).
 
 Manual checks still pending on real Windows:
 
@@ -508,6 +683,14 @@ Manual checks still pending on real Windows:
 - [ ] Upgrading from 0.6.0 on Windows Pro: no EFS dialog; `cipher /u /n` no longer lists files under `yt_mini_player`; sessions are kept.
 - [ ] Sign out everywhere: after it, YouTube and Netflix ask to sign in again.
 - [ ] Upgrading from 0.5.x keeps the settings (the old `.json` files disappear, `.enc` appear).
+- [ ] Minecraft (F11 fullscreen): the player stays on top; clicking pause on it doesn't minimize the game.
+- [ ] A borderless game that re-asserts topmost: the player doesn't flicker.
+- [ ] My music: add a folder with a few thousand songs; scanning finishes and the list scrolls smoothly.
+- [ ] My music: songs play, seeking works on FLAC and MP3, and the taskbar bar shows the cover.
+- [ ] Duplicates: a song in MP3 and FLAC is found as "Mismo audio"; the Recycle Bin gets the other copy.
+- [ ] Download (with a test store or `YTMP_DEV_UNLOCK=1`): an album downloads as a playlist; downloading it again downloads nothing.
+- [ ] Lemon Squeezy test mode: buy, activate, restart offline, deactivate.
+- [ ] Free plan: a third playlist can't be created (inline note, no dialog); after cancelling a test subscription with 5 playlists, all 5 remain and can be edited.
 
 ## Known issues
 
@@ -515,8 +698,18 @@ Manual checks still pending on real Windows:
   reports of intermittent failures, especially on fresh profiles. The picker's DRM line shows
   what's available; if it says none, wait a few minutes after installing and check again.
 - Exclusive fullscreen games can't be covered by any window, even with maximum overlay. Use
-  borderless or windowed fullscreen. If a game minimizes when the player covers it, the player
-  stops trying for that window.
+  borderless or windowed fullscreen. If a game minimizes itself while in front right after the
+  player covers it, the player stops trying for that window.
+- A game that re-asserts "topmost" on every frame can still win for a few milliseconds at a time
+  (a faint flicker); the maximum-overlay install avoids it entirely.
+- My music plays what WebView2 plays: MP3, AAC/M4A, FLAC, Ogg Vorbis, Opus and WAV. WMA, ALAC and
+  AIFF files are not listed. The acoustic fingerprint covers the first 60 s: two different edits
+  of a song (radio edit vs. album) are not duplicates; Opus files are compared by content and
+  tags only.
+- Internet Archive search depends on its service; items with only a ZIP, or without a usable
+  license, can't be downloaded. Per-item licenses are declared by uploaders.
+- The first scan of a large library reads tags and a 192 KB content hash of each file; on a slow
+  disk, thousands of songs take a few minutes (later scans only check size and date).
 - Maximum overlay: native WebView2 pop-ups (the right-click menu, `<select>` drop-downs) may open
   behind the player while it's always on top. Turn "always on top" off for a moment (Ctrl+T) to
   use them.
@@ -533,7 +726,7 @@ Manual checks still pending on real Windows:
   encryption stops that.
 - If Windows resets your account's protection keys (e.g. an administrator resets your password),
   the TPM is cleared, or the motherboard is replaced, the vault can't be read: the app starts
-  with default settings and you sign in again.
+  with default settings (sign in again, re-activate the license, re-add music folders).
 - Testers of 0.6.0 who chose "back up later" in the EFS dialog may see that reminder once more;
   choosing *Never* dismisses it. After upgrading, the app no longer has EFS-encrypted files.
 - **Opacity and ghost mode are experimental.** They rely on a Win32 layered window, and how that

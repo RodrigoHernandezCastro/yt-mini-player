@@ -1,8 +1,10 @@
-﻿YT Mini Player 0.6.1
+﻿YT Mini Player 0.7.0
 ====================
 
 Reproductor flotante para Windows 10/11: YouTube, YouTube Music, Netflix,
 Crunchyroll, Prime Video, Disney+, HBO Max, Twitch y cualquier otro sitio.
+Y "Mi música": tu biblioteca, playlists, duplicados y descargas de música
+con licencia libre.
 
 INSTALAR
   1. Descomprime este zip en cualquier carpeta.
@@ -21,7 +23,7 @@ INSTALAR
   instalar: si la descarga está dañada o alguien la modificó, se detiene.
 
 USO RÁPIDO
-  Al abrir, eliges el servicio: tecla 1–8 o clic. Para volver al menú:
+  Al abrir, eliges el servicio: tecla 1–9 o clic (9 = Mi música). Para volver al menú:
   botón de la casa en la barra, Alt+Inicio, o la bandeja → Menú principal.
 
   Mover ..................... arrastra el video (o Alt + arrastrar)
@@ -58,6 +60,38 @@ CON EL REPRODUCTOR OCULTO
   Los atajos de arriba también funcionan oculto y muestran los controles
   un par de segundos. El menú del icono (clic derecho) dice qué suena.
 
+MI MÚSICA (TECLA 9)
+  Tu propia música, con la misma barra en la barra de tareas, la bandeja
+  y los atajos globales.
+  - Biblioteca: "Carpeta" añade la carpeta donde guardas tu música (MP3,
+    FLAC, M4A, Ogg, Opus, WAV). Los archivos no se copian ni se mueven.
+    Buscar, ordenar, aleatorio, repetir; Espacio = reproducir/pausar.
+    Menú ⋯ de cada canción: sonar a continuación, añadir a playlist,
+    mostrar en la carpeta, quitar o enviar a la Papelera.
+  - Duplicados: encuentra canciones repetidas (mismo archivo, misma
+    canción por artista/título/duración, o mismo audio por huella
+    acústica aunque una sea MP3 y otra FLAC) y sugiere conservar la de
+    mejor calidad. Nada se borra sin confirmar, y va a la Papelera.
+  - Descargar: busca música con licencia libre del Internet Archive
+    (Creative Commons y dominio público; sin licencias "No comercial").
+    Puedes escucharla antes. Se guarda en Música\YT Mini Player.
+    Lo que ya tienes NO se vuelve a descargar (y si una descarga resulta
+    ser la misma canción que ya tenías, se descarta para no ocupar
+    espacio). Cita a los autores si compartes la música.
+  - Planes:
+      Gratis ........ biblioteca, reproductor, duplicados, escuchar
+                      música libre en línea y 2 playlists
+      Descargas ..... 2 USD/mes: descargar canciones y álbumes, y
+                      5 playlists
+      De por vida ... 10 USD una vez: todo, con playlists ilimitadas
+    Sin anuncios ni ventanas que interrumpan: los límites se ven donde
+    se usan ("2 de 2 playlists"). Si cambias de plan, nada se borra:
+    las playlists de más siguen ahí; solo no se crean nuevas.
+    Pestaña "Plan" → Comprar abre el pago en tu navegador (Lemon
+    Squeezy), sin crear cuentas. Pega la clave del correo en "Activar".
+    Se comprueba cada 7 días (suscripción) o cada 30 (de por vida); sin
+    conexión, la suscripción sigue 14 días y la de por vida, siempre.
+
 NETFLIX, CRUNCHYROLL Y SIMILARES (DRM)
   Estos servicios necesitan DRM (Widevine o PlayReady). El menú de inicio
   comprueba si el motor de Windows (WebView2) lo tiene y lo dice abajo. Si
@@ -70,6 +104,13 @@ SOBRE JUEGOS Y APPS A PANTALLA COMPLETA
   - Instalación normal: el reproductor vuelve a ponerse encima de los
     juegos en "pantalla completa sin bordes" o "ventana a pantalla
     completa" que lo tapen.
+  - Modo juego: con un juego a pantalla completa delante, hacer clic en
+    el reproductor NO le quita el foco al juego (no se minimiza ni se
+    pausa: Minecraft y similares). El teclado sigue en el juego; usa los
+    atajos Ctrl+Alt (P, N, B...) para controlar el video.
+  - Minecraft (Java): F11 funciona. Si en Opciones → Gráficos la
+    "Resolución de pantalla completa" no es la del escritorio, ponla en
+    "Actual" (o juega en ventana maximizada).
   - Superposición máxima: usa la misma capa de Windows que el teclado en
     pantalla, por encima de apps a pantalla completa, del menú Inicio y del
     Administrador de tareas. Para eso el instalador:
