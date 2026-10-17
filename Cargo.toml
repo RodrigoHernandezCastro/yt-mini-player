@@ -17,11 +17,11 @@ http = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Cifrado (RustCrypto, auditados): AES-256-GCM para la bóveda, Argon2id para
 # el PIN, SHA-256 para huellas de extensiones; claves borradas de memoria.
-aes-gcm = { version = "0.10", features = ["zeroize"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = { version = "0.5", features = ["std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 zeroize = "1"
-getrandom = "0.3"
+getrandom = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26"
@@ -35,7 +35,7 @@ windows = { version = "0.62", features = [
     "Win32_System_WinRT",
     "Win32_UI_Accessibility",
 ] }
-windows-future = "0.3"
+windows-future = "0.100"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
