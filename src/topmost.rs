@@ -11,11 +11,28 @@
 //! cuantas veces seguidas después (los juegos suelen cambiar de modo justo
 //! tras activarse) y una vez por segundo mientras está activo.
 //!
+//! **Modo juego.** Mientras hay un juego (o cualquier app) a pantalla
+//! completa en primer plano, un clic en el reproductor NO lo activa
+//! (`WS_EX_NOACTIVATE` temporal y `WM_MOUSEACTIVATE` → `MA_NOACTIVATE`): el
+//! juego sigue con el foco y el teclado. Muchos
+//! juegos (Minecraft y todo lo que usa GLFW, SDL…) se minimizan o se pausan
+//! al perder el foco en pantalla completa; así se puede pausar el video o
+//! moverse por él sin sacar al juego de su modo.
+//!
+//! **Reacción inmediata.** Además del gancho de primer plano, uno de
+//! `EVENT_OBJECT_REORDER` despierta al vigilante cuando cambia el orden Z
+//! con un juego delante (juegos que se reafirman topmost a cada rato), y
+//! mientras el juego insiste se revisa cada 15 ms. Entre dos subidas pasan
+//! al menos `MIN_RAISE_GAP`, para no entrar en un bucle sin freno.
+//!
 //! Lo que deliberadamente NO hace:
 //! - Subirse sobre el shell (Inicio, Alt+Tab, recortes, bloqueo...), sobre
 //!   herramientas de captura ni sobre capas transparentes (overlays).
 //! - Insistir con un juego que se minimiza al taparlo: eso indica pantalla
-//!   completa *exclusiva*, que ninguna ventana normal puede cubrir.
+//!   completa *exclusiva*, que ninguna ventana normal puede cubrir. Solo
+//!   cuenta si se minimizó *estando delante*: los juegos que se minimizan
+//!   al perder el foco (Alt+Tab; Minecraft y GLFW lo hacen) no son
+//!   exclusivos y se vuelven a cubrir al volver a ellos.
 //! - Robar el foco: siempre usa `SWP_NOACTIVATE`.
 
 use crate::platform::Rect;
@@ -82,13 +99,54 @@ pub fn is_protected_process(exe: &str) -> bool {
     exe.starts_with("powertoys") || exe.ends_with(".scr") || NEVER_COVER.contains(&exe.as_str())
 }
 
-/// Decisión final: ¿hay que volver a subir el reproductor?
+/// Orden de los avisos de Windows: ¿quién era la ventana activa cuando otra
+/// empezó a minimizarse? Si era ella misma, se minimizó por su cuenta (no
+/// por un Alt+Tab o un clic en otra ventana, que la desactivan antes).
+#[derive(Debug, Default)]
+pub struct FocusLog {
+    foreground: isize,
+    minimized_in_front: Option<(isize, std::time::Instant)>,
+}
+
+impl FocusLog {
+    pub const fn new() -> Self {
+        Self { foreground: 0, minimized_in_front: None }
+    }
+
+    /// Aviso `EVENT_SYSTEM_FOREGROUND`.
+    pub fn foreground(&mut self, hwnd: isize) {
+        self.foreground = hwnd;
+    }
+
+    /// Aviso `EVENT_SYSTEM_MINIMIZESTART`.
+    pub fn minimize_start(&mut self, hwnd: isize, at: std::time::Instant) {
+        if hwnd != 0 && hwnd == self.foreground {
+            self.minimized_in_front = Some((hwnd, at));
+        }
+    }
+
+    pub fn take_minimized_in_front(&mut self) -> Option<(isize, std::time::Instant)> {
+        self.minimized_in_front.take()
+    }
+}
+
+/// ¿Se minimizó (estando delante) poco después de taparla? Entonces es
+/// pantalla completa exclusiva.
+pub fn exclusive(raised: std::time::Instant, minimized: std::time::Instant, window: std::time::Duration) -> bool {
+    minimized >= raised && minimized.duration_since(raised) < window
+}
+
+/// ¿Es una app que se puede tapar? (No el shell, ni una capa flotante, ni
+/// una ventana oculta por DWM.)
+pub fn coverable(fg: &Foreground) -> bool {
+    !fg.cloaked && !is_overlay(fg.ex_style) && !is_protected_process(fg.exe)
+}
+
+/// Decisión final: ¿hay que volver a subir el reproductor? (El vigilante
+/// hace lo mismo por partes, guardando `coverable` por ventana.)
+#[cfg(test)]
 pub fn should_raise(fg: &Foreground, monitor: Rect) -> bool {
-    fg.above_us
-        && !fg.cloaked
-        && covers(fg.rect, monitor)
-        && !is_overlay(fg.ex_style)
-        && !is_protected_process(fg.exe)
+    fg.above_us && covers(fg.rect, monitor) && coverable(fg)
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +169,7 @@ mod win {
     };
 
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, HWND, RECT},
+        Foundation::{CloseHandle, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::{
             Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
             Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST},
@@ -119,16 +177,19 @@ mod win {
         System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION},
         UI::{
             Accessibility::{SetWinEventHook, HWINEVENTHOOK},
+            Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::{
                 GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-                IsIconic, IsWindow, IsWindowVisible, SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE,
-                GW_HWNDPREV, HWND_TOPMOST, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-                SWP_NOSIZE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+                IsIconic, IsWindow, IsWindowVisible, SetWindowPos, EVENT_OBJECT_REORDER, EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_MINIMIZESTART,
+                GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, MA_NOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SetWindowLongPtrW, WINEVENT_OUTOFCONTEXT,
+                WINEVENT_SKIPOWNPROCESS, WM_MOUSEACTIVATE, WS_EX_NOACTIVATE,
             },
         },
     };
 
-    use super::{should_raise, Foreground};
+    use super::{FocusLog, Foreground};
     use crate::platform::Rect;
 
     /// Revisiones seguidas tras un cambio de ventana activa.
@@ -137,20 +198,78 @@ mod win {
     const IDLE_INTERVAL: Duration = Duration::from_secs(1);
     /// Mientras hay una app a pantalla completa delante, se revisa más a
     /// menudo: algunas se reafirman como topmost sin cambiar de foco.
-    const FULLSCREEN_INTERVAL: Duration = Duration::from_millis(250);
-    /// Si el juego se minimiza en este plazo tras taparlo, es exclusivo.
+    const FULLSCREEN_INTERVAL: Duration = Duration::from_millis(100);
+    /// Si el juego nos volvió a tapar hace poco (se reafirma topmost a cada
+    /// rato), aún más a menudo: es barato (sin abrir procesos).
+    const FIGHT_INTERVAL: Duration = Duration::from_millis(15);
+    const FIGHT_MEMORY: Duration = Duration::from_secs(1);
+    /// Separación mínima entre dos subidas (freno contra bucles).
+    const MIN_RAISE_GAP: Duration = Duration::from_millis(15);
+    /// Si el juego se minimiza estando delante en este plazo tras taparlo,
+    /// es exclusivo.
     const EXCLUSIVE_WINDOW: Duration = Duration::from_secs(3);
 
     static OURS: AtomicIsize = AtomicIsize::new(0);
     static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// Hay una app a pantalla completa en primer plano (en cualquier monitor).
+    static GAME: AtomicBool = AtomicBool::new(false);
     static BURST: AtomicU32 = AtomicU32::new(0);
+    /// Va aparte de STATE: los ganchos corren en el hilo de la interfaz y
+    /// nunca deben esperar al vigilante (que le envía mensajes).
+    static FOCUS: Mutex<FocusLog> = Mutex::new(FocusLog::new());
+
+    enum Poll {
+        Idle,
+        Fullscreen,
+        Fight,
+    }
     static WORKER: OnceLock<Thread> = OnceLock::new();
-    static STATE: Mutex<State> = Mutex::new(State { skip: Vec::new(), last_raise: None });
+    static STATE: Mutex<State> =
+        Mutex::new(State { skip: Vec::new(), last_raise: None, last_any_raise: None, known: None });
 
     struct State {
         /// Ventanas en pantalla completa exclusiva: no se insiste con ellas.
         skip: Vec<isize>,
+        /// Última subida sobre una ventana a pantalla completa.
         last_raise: Option<(isize, Instant)>,
+        last_any_raise: Option<Instant>,
+        /// Última ventana clasificada: (hwnd, ¿se puede tapar?). Evita abrir
+        /// el proceso en cada revisión.
+        known: Option<(isize, bool)>,
+    }
+
+    /// Entra o sale del modo juego. Con `WS_EX_NOACTIVATE` Windows no activa
+    /// la ventana al hacer clic, ni siquiera en el webview (que es de otro
+    /// proceso y decide su propia activación).
+    /// Se comprueba el estilo cada vez (es barato: no envía mensajes) por si
+    /// tao lo recalculó al cambiar otra opción de la ventana.
+    fn set_game(on: bool) {
+        GAME.store(on, Ordering::Relaxed);
+        let ours = OURS.load(Ordering::Relaxed) as HWND;
+        if ours.is_null() {
+            return;
+        }
+        unsafe {
+            let style = GetWindowLongPtrW(ours, GWL_EXSTYLE);
+            let next = if on { style | WS_EX_NOACTIVATE as isize } else { style & !(WS_EX_NOACTIVATE as isize) };
+            if next != style {
+                SetWindowLongPtrW(ours, GWL_EXSTYLE, next);
+            }
+        }
+    }
+
+    unsafe extern "system" fn no_steal_focus(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        if msg == WM_MOUSEACTIVATE && GAME.load(Ordering::Relaxed) {
+            return MA_NOACTIVATE as LRESULT;
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 
     /// Arranca el vigilante para la ventana `hwnd`. Llamar desde el hilo de
@@ -159,11 +278,32 @@ mod win {
     pub fn start(hwnd: isize) {
         OURS.store(hwnd, Ordering::Relaxed);
         unsafe {
+            SetWindowSubclass(hwnd as HWND, Some(no_steal_focus), 0x7974_6d67, 0);
+            // Sin SKIPOWNPROCESS: también interesa saber cuándo se activa el
+            // reproductor (orden de los avisos para detectar exclusivos).
             SetWinEventHook(
                 EVENT_SYSTEM_FOREGROUND,
                 EVENT_SYSTEM_FOREGROUND,
                 null_mut(),
                 Some(on_foreground),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            SetWinEventHook(
+                EVENT_SYSTEM_MINIMIZESTART,
+                EVENT_SYSTEM_MINIMIZESTART,
+                null_mut(),
+                Some(on_minimize),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            );
+            SetWinEventHook(
+                EVENT_OBJECT_REORDER,
+                EVENT_OBJECT_REORDER,
+                null_mut(),
+                Some(on_reorder),
                 0,
                 0,
                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
@@ -179,6 +319,8 @@ mod win {
         ACTIVE.store(active, Ordering::Relaxed);
         if active {
             wake();
+        } else {
+            set_game(false);
         }
     }
 
@@ -192,15 +334,54 @@ mod win {
     unsafe extern "system" fn on_foreground(
         _hook: HWINEVENTHOOK,
         _event: u32,
-        _hwnd: HWND,
+        hwnd: HWND,
         id_object: i32,
         _id_child: i32,
         _thread: u32,
         _time: u32,
     ) {
         // OBJID_WINDOW = 0: el aviso es sobre la ventana, no sobre un objeto.
-        if id_object == 0 && ACTIVE.load(Ordering::Relaxed) {
+        if id_object != 0 {
+            return;
+        }
+        FOCUS.lock().unwrap_or_else(|e| e.into_inner()).foreground(hwnd as isize);
+        if ACTIVE.load(Ordering::Relaxed) {
             wake();
+        }
+    }
+
+    /// Una ventana empieza a minimizarse. Si para Windows seguía siendo la
+    /// activa (no hubo Alt+Tab ni clic en otra antes), se minimizó por su
+    /// cuenta: posible pantalla completa exclusiva.
+    unsafe extern "system" fn on_minimize(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        hwnd: HWND,
+        id_object: i32,
+        _id_child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        if id_object == 0 {
+            FOCUS.lock().unwrap_or_else(|e| e.into_inner()).minimize_start(hwnd as isize, Instant::now());
+        }
+    }
+
+    /// Cambió el orden Z de alguna ventana: con un juego delante, se revisa
+    /// ya (no hace falta esperar a la siguiente vuelta).
+    unsafe extern "system" fn on_reorder(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        _hwnd: HWND,
+        _id_object: i32,
+        _id_child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        if ACTIVE.load(Ordering::Relaxed) && GAME.load(Ordering::Relaxed) {
+            if let Some(worker) = WORKER.get() {
+                worker.unpark();
+            }
         }
     }
 
@@ -208,79 +389,125 @@ mod win {
         loop {
             if !ACTIVE.load(Ordering::Relaxed) {
                 // Sin coste mientras "siempre visible" está apagado.
+                set_game(false);
                 thread::park();
                 continue;
             }
-            let fullscreen_in_front = unsafe { check() };
+            let poll = unsafe { check() };
             let burst = BURST.load(Ordering::Relaxed);
+            let wait = match poll {
+                Poll::Fight => FIGHT_INTERVAL,
+                _ if burst > 0 => BURST_INTERVAL,
+                Poll::Fullscreen => FULLSCREEN_INTERVAL,
+                Poll::Idle => IDLE_INTERVAL,
+            };
             if burst > 0 {
                 BURST.store(burst - 1, Ordering::Relaxed);
-                thread::park_timeout(BURST_INTERVAL);
-            } else if fullscreen_in_front {
-                thread::park_timeout(FULLSCREEN_INTERVAL);
-            } else {
-                thread::park_timeout(IDLE_INTERVAL);
             }
+            thread::park_timeout(wait);
         }
     }
 
-    /// Revisa y, si hace falta, sube el reproductor. Devuelve si la ventana
-    /// activa es una app a pantalla completa en nuestro monitor.
-    unsafe fn check() -> bool {
+    /// Revisa y, si hace falta, sube el reproductor. Devuelve cada cuánto
+    /// conviene volver a mirar.
+    unsafe fn check() -> Poll {
         let ours = OURS.load(Ordering::Relaxed) as HWND;
         if ours.is_null() || IsWindowVisible(ours) == 0 || IsIconic(ours) != 0 {
-            return false;
+            set_game(false);
+            return Poll::Idle;
         }
         let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
 
         // Olvida ventanas que ya no existen.
         state.skip.retain(|&h| IsWindow(h as HWND) != 0);
-        // ¿El último juego que tapamos se minimizó enseguida? Es pantalla
-        // completa exclusiva: insistir lo minimizaría una y otra vez.
-        if let Some((hwnd, at)) = state.last_raise {
-            if at.elapsed() < EXCLUSIVE_WINDOW && IsIconic(hwnd as HWND) != 0 {
+        // ¿El último juego que tapamos se minimizó enseguida y estando
+        // delante? Es pantalla completa exclusiva: insistir lo minimizaría
+        // una y otra vez.
+        let minimized = FOCUS.lock().unwrap_or_else(|e| e.into_inner()).take_minimized_in_front();
+        if let (Some((raised, at)), Some((hwnd, when))) = (state.last_raise, minimized) {
+            if hwnd == raised && super::exclusive(at, when, EXCLUSIVE_WINDOW) {
                 if state.skip.len() < 32 {
                     state.skip.push(hwnd);
                 }
                 state.last_raise = None;
-            } else if at.elapsed() >= EXCLUSIVE_WINDOW {
-                state.last_raise = None;
             }
+        }
+        if state.last_raise.is_some_and(|(_, at)| at.elapsed() >= EXCLUSIVE_WINDOW) {
+            state.last_raise = None;
         }
 
         let fg = GetForegroundWindow();
-        if fg.is_null() || fg == ours || state.skip.contains(&(fg as isize)) {
-            return false;
+        if fg == ours {
+            // Solo se llega aquí si el usuario activó el reproductor a
+            // propósito (Alt+Tab, barra de tareas): fuera del modo juego.
+            set_game(false);
+            return Poll::Idle;
         }
-        let (Some(monitor), Some(rect)) = (monitor_rect(ours), window_rect(fg)) else { return false };
-        // Comprobaciones baratas primero; el nombre del proceso, al final.
-        if !super::covers(rect, monitor) {
-            return false;
+        if fg.is_null() || state.skip.contains(&(fg as isize)) {
+            set_game(false);
+            return Poll::Idle;
         }
-        if !is_above(fg, ours) {
-            return true;
-        }
-        let exe = process_name(fg);
-        let foreground = Foreground {
-            rect,
-            ex_style: GetWindowLongPtrW(fg, GWL_EXSTYLE) as u32,
-            cloaked: is_cloaked(fg),
-            above_us: true,
-            exe: &exe,
+        let Some(rect) = window_rect(fg) else {
+            set_game(false);
+            return Poll::Idle;
         };
-        if should_raise(&foreground, monitor) {
-            SetWindowPos(
-                ours,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
-            );
-            state.last_raise = Some((fg as isize, Instant::now()));
+        // ¿Juego a pantalla completa en SU monitor? (Puede estar en otro: un
+        // clic en el reproductor tampoco debe quitarle el foco.)
+        let fg_fullscreen = monitor_rect(fg).is_some_and(|m| super::covers(rect, m));
+        if !fg_fullscreen {
+            set_game(false);
+            state.known = None;
+            return Poll::Idle;
         }
-        true
+        // Clasificación (proceso, estilo, capas): una vez por ventana.
+        let coverable = match state.known {
+            Some((hwnd, coverable)) if hwnd == fg as isize => coverable,
+            _ => {
+                let exe = process_name(fg);
+                let candidate = Foreground {
+                    rect,
+                    ex_style: GetWindowLongPtrW(fg, GWL_EXSTYLE) as u32,
+                    cloaked: is_cloaked(fg),
+                    above_us: true,
+                    exe: &exe,
+                };
+                let coverable = super::coverable(&candidate);
+                state.known = Some((fg as isize, coverable));
+                coverable
+            }
+        };
+        set_game(coverable);
+        let Some(monitor) = monitor_rect(ours) else { return Poll::Idle };
+        if !coverable || !super::covers(rect, monitor) {
+            return if coverable { Poll::Fullscreen } else { Poll::Idle };
+        }
+        let fighting = state.last_any_raise.is_some_and(|at| at.elapsed() < FIGHT_MEMORY);
+        if !is_above(fg, ours) {
+            return if fighting { Poll::Fight } else { Poll::Fullscreen };
+        }
+        // Contra peleas: si el juego se reafirma sin parar, como mucho una
+        // subida cada MIN_RAISE_GAP.
+        if let Some(at) = state.last_any_raise {
+            let since = at.elapsed();
+            if since < MIN_RAISE_GAP {
+                drop(state);
+                thread::sleep(MIN_RAISE_GAP - since);
+                state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+            }
+        }
+        SetWindowPos(
+            ours,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+        );
+        let now = Instant::now();
+        state.last_any_raise = Some(now);
+        state.last_raise = Some((fg as isize, now));
+        Poll::Fight
     }
 
     unsafe fn monitor_rect(hwnd: HWND) -> Option<Rect> {
@@ -356,6 +583,7 @@ pub fn start(_: isize) {}
 #[cfg(not(windows))]
 pub fn set_active(_: bool) {}
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +638,46 @@ mod tests {
         }
         // Si no se pudo leer el nombre, se trata como un juego.
         assert!(should_raise(&Foreground { exe: "", ..game(MONITOR) }, MONITOR));
+    }
+
+    #[test]
+    fn minimized_in_front_follows_event_order() {
+        use std::time::Instant;
+        let (game, other, player) = (10, 20, 30);
+        let now = Instant::now();
+        // Pantalla completa exclusiva: se minimiza siendo la activa.
+        let mut log = FocusLog::new();
+        log.foreground(game);
+        log.minimize_start(game, now);
+        assert_eq!(log.take_minimized_in_front(), Some((game, now)));
+        assert_eq!(log.take_minimized_in_front(), None, "se consume");
+        // Alt+Tab (o clic en otra app): primero cambia la ventana activa,
+        // después el juego (GLFW, SDL) se minimiza al perder el foco.
+        log.foreground(game);
+        log.foreground(other);
+        log.minimize_start(game, now);
+        assert_eq!(log.take_minimized_in_front(), None);
+        // Si se activa el reproductor (Alt+Tab hacia él), igual.
+        log.foreground(game);
+        log.foreground(player);
+        log.minimize_start(game, now);
+        assert_eq!(log.take_minimized_in_front(), None);
+        // Sin ningún aviso previo no se acusa a nadie.
+        let mut empty = FocusLog::new();
+        empty.minimize_start(0, now);
+        assert_eq!(empty.take_minimized_in_front(), None);
+    }
+
+    #[test]
+    fn exclusive_only_if_minimized_soon_after_covering() {
+        use std::time::{Duration, Instant};
+        let t = Instant::now();
+        let s = |n: u64| t + Duration::from_millis(n);
+        let window = Duration::from_secs(3);
+        assert!(exclusive(t, s(200), window));
+        assert!(exclusive(t, s(2999), window));
+        assert!(!exclusive(t, s(3000), window), "mucho después: otra causa");
+        assert!(!exclusive(s(500), t, window), "se minimizó antes de taparlo");
     }
 
     #[test]
