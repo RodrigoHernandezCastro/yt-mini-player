@@ -1,0 +1,51 @@
+# Comprobaciones en cada push y pull request: pruebas, lint y auditoría de
+# dependencias. Las acciones de terceros van fijadas a una versión.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Pruebas de Rust
+        run: cargo test --locked
+      - name: Clippy (avisos = error)
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Pruebas de JavaScript
+        run: |
+          node tests/inject.test.js
+          node tests/maintenance.test.js
+          node tests/media.test.js
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pruebas de extremo a extremo (Chromium)
+        run: |
+          pip install playwright==1.47.0
+          python -m playwright install chromium
+          python tests/ui_e2e.py
+          python tests/home_e2e.py
+          python tests/mini_e2e.py
+          python tests/security_e2e.py
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Vulnerabilidades conocidas (RustSec), licencias, orígenes y crates
+      # duplicados o prohibidos (deny.toml).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources

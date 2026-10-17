@@ -13,14 +13,25 @@ function env() {
   const document = { readyState:'complete', documentElement: root, head: root,
     createElement:()=>({}), addEventListener(){}, querySelector:()=>null };
   class Element {}
-  vm.runInNewContext(src, { window, document, Element, setTimeout, PointerEvent: class {}, MouseEvent: class {} });
+  const shared = {};
+  // __ytmpSend/__ytmpShared los pone el envoltorio de webview.rs.
+  vm.runInNewContext(src, { window, document, Element, HTMLVideoElement: class {}, setTimeout, innerWidth: 640, innerHeight: 360, location: { hostname: 'www.youtube.com' }, PointerEvent: class {}, MouseEvent: class {}, __ytmpSend: m => sent.push(m), __ytmpShared: shared });
   const fire = (t, props) => {
-    const e = { defaultPrevented:false, stopped:false, altKey:false, button:0, buttons:0,
+    const e = { isTrusted:true, defaultPrevented:false, stopped:false, altKey:false, button:0, buttons:0,
       pointerType:'mouse', clientX:320, clientY:180, ...props,
       preventDefault(){this.defaultPrevented=true}, stopImmediatePropagation(){this.stopped=true} };
     (listeners[t]||[]).forEach(f=>f(e)); return e;
   };
-  return { fire, sent, attrs };
+  return { fire, sent, attrs, shared };
+}
+
+// Un evento sintético de la página (isTrusted = false) no mueve la ventana.
+{
+  const u = env();
+  const ev = u.fire('pointerdown', { altKey:true, isTrusted:false });
+  assert.deepStrictEqual(u.sent, []); assert(!ev.defaultPrevented);
+  // El asa de ui.js usa startDrag sin exponerlo en window.
+  assert.strictEqual(typeof u.shared.startDrag, 'function');
 }
 
 // Alt+clic en el centro → drag, y se consume el click posterior
@@ -61,6 +72,6 @@ t = env(); assert(t.fire('dblclick', { altKey:true }).stopped);
 
 // iframe: no se instala
 { const l={}; const w={addEventListener:(t,f)=>(l[t]||=[]).push(f)}; w.top={};
-  vm.runInNewContext(src,{window:w,document:{}}); assert.strictEqual(Object.keys(l).length,0); }
+  vm.runInNewContext(src,{window:w,document:{},location:{hostname:'www.youtube.com'},__ytmpSend(){},__ytmpShared:{}}); assert.strictEqual(Object.keys(l).length,0); }
 
 console.log('inject.js: todas las pruebas pasan');

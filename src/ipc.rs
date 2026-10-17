@@ -45,27 +45,20 @@ impl SizePreset {
     }
 }
 
-/// Acciones sobre el reproductor de YouTube (atajos globales).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Media {
-    PlayPause,
-    Next,
-    Previous,
-}
+pub use crate::media::{MediaAction, MediaState};
 
-impl Media {
-    pub fn js_name(self) -> &'static str {
-        match self {
-            Media::PlayPause => "toggle",
-            Media::Next => "next",
-            Media::Previous => "previous",
-        }
-    }
+/// Fases del arrastre de la barra de música a lo largo de la barra de
+/// tareas. La posición la lee el host del cursor (no la manda la página).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragPhase {
+    Start,
+    Move,
+    End,
 }
 
 /// Todo lo que la aplicación sabe hacer. Llega desde la página (IPC), la
-/// bandeja del sistema o los atajos globales.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// bandeja del sistema, la barra de música o los atajos globales.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     // Ventana
     Drag,
@@ -83,11 +76,30 @@ pub enum Command {
     Hide,
     ToggleVisible,
     Quit,
+    // Servicios
+    Home,
+    OpenService(String),
+    OpenUrl(String),
+    SetStartWithLast(bool),
     // Página
     Ready,
     ToggleVideoOnly,
     OpenClipboard,
-    Media(Media),
+    Media(MediaAction),
+    /// Lo que suena ahora (informe de media.js).
+    MediaReport(Box<MediaState>),
+    // Bandeja y barra de música
+    /// Clic izquierdo en el icono; posición del icono en píxeles físicos.
+    TrayClick(i32, i32),
+    TrayDoubleClick,
+    /// "Mostrar barra de controles" del menú de la bandeja.
+    MiniShow,
+    MiniHide,
+    MiniHover(bool),
+    MiniReady,
+    MiniDrag(DragPhase),
+    /// Ajuste: barra de música en la barra de tareas con servicios de música.
+    ToggleTaskbarBar,
     // Extensiones
     ExtensionsFolder,
     ExtensionsReload,
@@ -95,6 +107,34 @@ pub enum Command {
     ExtensionOptions(String),
     // Sistema
     ToggleAutostart,
+    // Navegación (desde los filtros de webview.rs; la página no puede pedirlas)
+    /// Navegar la ventana principal (http mejorado a https, ventana nueva
+    /// de un servicio del catálogo).
+    Navigate(String),
+    /// Abrir en el navegador predeterminado (ventana nueva de otro sitio).
+    OpenExternal(String),
+    /// Algo se bloqueó; el texto es el motivo, para el aviso.
+    Blocked(String),
+    // Seguridad (bandeja y pantalla de bloqueo; nunca desde la página)
+    LockNow,
+    /// Elegir el modo de bloqueo (el mismo que ya está = desactivarlo).
+    SetLock(crate::config::LockMode),
+    SignOutAll,
+    SecurityStatus,
+    LockReady,
+    LockHello,
+    LockPin(String),
+    LockNewPin(String),
+    LockCancel,
+    /// "¿Olvidaste el PIN?" en la pantalla de bloqueo.
+    LockForgot,
+    /// Resultado de verificar con Windows Hello para quitar un PIN olvidado.
+    ForgotResult(Result<bool, String>),
+    /// Resultados de hilos de trabajo.
+    HelloResult(Result<bool, String>),
+    PinChecked(bool),
+    PinHashed(Result<String, String>),
+    BrowsingDataCleared(bool),
 }
 
 /// Opacidad mínima: por debajo la ventana es prácticamente invisible y el
@@ -118,6 +158,13 @@ pub fn parse(message: &str) -> Option<Command> {
         ("hide", None) => Command::Hide,
         ("quit", None) => Command::Quit,
         ("open-clipboard", None) => Command::OpenClipboard,
+        ("media-state", Some(json)) => Command::MediaReport(Box::new(MediaState::from_report(json)?)),
+        ("home", None) => Command::Home,
+        ("service", Some(id)) if crate::services::is_service_id(id) => Command::OpenService(id.to_owned()),
+        // La dirección se valida al ejecutar la orden (services::parse_user_url).
+        ("open-url", Some(url)) if !url.is_empty() && url.len() <= 2048 => Command::OpenUrl(url.to_owned()),
+        ("start-with-last", Some("1")) => Command::SetStartWithLast(true),
+        ("start-with-last", Some("0")) => Command::SetStartWithLast(false),
         ("fullscreen", Some("1")) => Command::SetFullscreen(true),
         ("fullscreen", Some("0")) => Command::SetFullscreen(false),
         ("opacity", Some(value)) => {
@@ -148,6 +195,41 @@ pub fn parse(message: &str) -> Option<Command> {
     Some(command)
 }
 
+/// Mensajes de la barra de música (otra lista cerrada, en otra ventana).
+pub fn parse_mini(message: &str) -> Option<Command> {
+    if let Some(action) = message.strip_prefix("media:") {
+        return MediaAction::parse(action).map(Command::Media);
+    }
+    Some(match message {
+        "player:show" => Command::Show,
+        "mini:close" => Command::MiniHide,
+        "mini:hover:1" => Command::MiniHover(true),
+        "mini:hover:0" => Command::MiniHover(false),
+        "mini:ready" => Command::MiniReady,
+        "mini:drag:start" => Command::MiniDrag(DragPhase::Start),
+        "mini:drag:move" => Command::MiniDrag(DragPhase::Move),
+        "mini:drag:end" => Command::MiniDrag(DragPhase::End),
+        _ => return None,
+    })
+}
+
+/// Mensajes de la pantalla de bloqueo (otra lista cerrada, otro webview).
+pub fn parse_lock(message: &str) -> Option<Command> {
+    let pin = |p: &str| (!p.is_empty() && p.chars().count() <= crate::lock::PIN_MAX).then(|| p.to_owned());
+    Some(match message.split_once(':') {
+        Some(("lock", "ready")) => Command::LockReady,
+        Some(("lock", "hello")) => Command::LockHello,
+        Some(("lock", "cancel")) => Command::LockCancel,
+        Some(("lock", "forgot")) => Command::LockForgot,
+        Some(("lock", rest)) => match rest.split_once(':') {
+            Some(("pin", p)) => Command::LockPin(pin(p)?),
+            Some(("new-pin", p)) => Command::LockNewPin(pin(p)?),
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
 fn parse_edge(dir: &str) -> Option<Edge> {
     Some(match dir {
         "n" => Edge::North,
@@ -168,7 +250,7 @@ pub fn is_extension_id(id: &str) -> bool {
 }
 
 /// Eventos que llegan al bucle principal desde otros hilos o callbacks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UserEvent {
     Command(Command),
     Extension(crate::extensions::ExtensionEvent),
@@ -191,6 +273,69 @@ mod tests {
         assert_eq!(parse("corner:sw"), Some(Command::Corner(Corner::BottomLeft)));
         assert_eq!(parse("hide"), Some(Command::Hide));
         assert_eq!(parse("quit"), Some(Command::Quit));
+    }
+
+    #[test]
+    fn parses_service_messages() {
+        assert_eq!(parse("home"), Some(Command::Home));
+        assert_eq!(parse("service:netflix"), Some(Command::OpenService("netflix".into())));
+        assert_eq!(parse("open-url:https://plex.tv/web"), Some(Command::OpenUrl("https://plex.tv/web".into())));
+        assert_eq!(parse("start-with-last:1"), Some(Command::SetStartWithLast(true)));
+        assert_eq!(parse("start-with-last:0"), Some(Command::SetStartWithLast(false)));
+        for bad in ["home:1", "service:", "service:Netflix", "service:../x", "open-url:", "start-with-last:2"] {
+            assert_eq!(parse(bad), None, "{bad}");
+        }
+        assert_eq!(parse(&format!("open-url:{}", "a".repeat(3000))), None);
+    }
+
+    #[test]
+    fn parses_media_reports() {
+        match parse(r#"media-state:{"hasMedia":true,"title":"Hola","playing":true}"#) {
+            Some(Command::MediaReport(state)) => assert!(state.playing && state.title == "Hola"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(parse("media-state:no es json"), None);
+        assert_eq!(parse("media-state:"), None);
+    }
+
+    #[test]
+    fn mini_protocol_is_separate_and_closed() {
+        assert_eq!(parse_mini("media:next"), Some(Command::Media(MediaAction::Next)));
+        assert_eq!(parse_mini("media:volume:30"), Some(Command::Media(MediaAction::Volume(30))));
+        assert_eq!(parse_mini("player:show"), Some(Command::Show));
+        assert_eq!(parse_mini("mini:hover:1"), Some(Command::MiniHover(true)));
+        assert_eq!(parse_mini("mini:close"), Some(Command::MiniHide));
+        assert_eq!(parse_mini("mini:drag:start"), Some(Command::MiniDrag(DragPhase::Start)));
+        assert_eq!(parse_mini("mini:drag:move"), Some(Command::MiniDrag(DragPhase::Move)));
+        assert_eq!(parse_mini("mini:drag:end"), Some(Command::MiniDrag(DragPhase::End)));
+        assert_eq!(parse_mini("mini:drag:200"), None, "la posición no la decide la página");
+        // La barra de música no puede pedir nada de la página principal...
+        for msg in ["quit", "drag", "pin", "service:netflix", "open-url:x.com", "media:borrar", "mini:hover:2"] {
+            assert_eq!(parse_mini(msg), None, "{msg}");
+        }
+        // ...y la página no puede usar el protocolo de la barra de música.
+        for msg in ["media:next", "player:show", "mini:close", "mini:drag:start"] {
+            assert_eq!(parse(msg), None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn lock_protocol_is_separate_and_closed() {
+        assert_eq!(parse_lock("lock:ready"), Some(Command::LockReady));
+        assert_eq!(parse_lock("lock:hello"), Some(Command::LockHello));
+        assert_eq!(parse_lock("lock:forgot"), Some(Command::LockForgot));
+        assert_eq!(parse_lock("lock:pin:482915"), Some(Command::LockPin("482915".into())));
+        assert_eq!(parse_lock("lock:pin:a:b"), Some(Command::LockPin("a:b".into())), "el PIN puede llevar ':'");
+        assert_eq!(parse_lock("lock:new-pin:clave larga"), Some(Command::LockNewPin("clave larga".into())));
+        let long = format!("lock:pin:{}", "1".repeat(65));
+        for bad in ["lock:pin:", "lock:off", "lock", "quit", "media:next", "mini:close", long.as_str()] {
+            assert_eq!(parse_lock(bad), None, "{bad}");
+        }
+        // Ni la página ni la barra pueden usar el protocolo de bloqueo.
+        for msg in ["lock:hello", "lock:pin:482915", "lock:cancel"] {
+            assert_eq!(parse(msg), None, "{msg}");
+            assert_eq!(parse_mini(msg), None, "{msg}");
+        }
     }
 
     #[test]

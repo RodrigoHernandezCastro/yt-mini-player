@@ -23,13 +23,13 @@ const MIN_SIZE: (f64, f64) = (256.0, 144.0);
 pub fn build<T: 'static>(
     target: &EventLoopWindowTarget<T>,
     saved: Option<WindowGeometry>,
-    always_on_top: bool,
 ) -> Result<Window, OsError> {
     let mut builder = WindowBuilder::new()
         .with_title(TITLE)
         .with_window_icon(crate::icon::window_icon())
         .with_decorations(false)
-        .with_always_on_top(always_on_top)
+        // Nunca topmost al crearla: App lo aplica tras crear el webview.
+        .with_always_on_top(false)
         .with_resizable(true)
         .with_visible(false)
         .with_min_inner_size(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1))

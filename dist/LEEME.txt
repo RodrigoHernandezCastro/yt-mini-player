@@ -1,42 +1,131 @@
-﻿YT Mini Player 0.2.0
+﻿YT Mini Player 0.6.1
 ====================
 
-Reproductor flotante de YouTube para Windows 10/11.
+Reproductor flotante para Windows 10/11: YouTube, YouTube Music, Netflix,
+Crunchyroll, Prime Video, Disney+, HBO Max, Twitch y cualquier otro sitio.
 
 INSTALAR
   1. Descomprime este zip en cualquier carpeta.
-  2. Doble clic en "Instalar.cmd".
-     Copia la app a %LOCALAPPDATA%\Programs\YT Mini Player, crea accesos
-     directos en el menú Inicio y el escritorio, y la abre. No pide
-     permisos de administrador.
+  2. Elige una:
+     - "Instalar.cmd" (normal). Copia la app a
+       %LOCALAPPDATA%\Programs\YT Mini Player, crea accesos directos y la
+       abre. No pide permisos de administrador.
+     - "Instalar-superposicion.cmd" (superposición máxima). Igual, pero el
+       reproductor puede quedar encima de apps y juegos a pantalla completa.
+       Pide permiso de administrador una vez (ver más abajo).
 
-  Si Windows muestra "Windows protegió su PC" (SmartScreen), es porque el
-  ejecutable no está firmado: pulsa "Más información" → "Ejecutar de todas
-  formas". Solo pasa la primera vez.
+  Si Windows muestra "Windows protegió su PC" (SmartScreen), pulsa "Más
+  información" → "Ejecutar de todas formas". Solo pasa la primera vez.
 
-  También puedes ejecutar yt-mini-player.exe directamente, sin instalar
-  (mantén WebView2Loader.dll en la misma carpeta si viene en el zip).
+  El instalador comprueba cada archivo con SHA256SUMS.txt antes de
+  instalar: si la descarga está dañada o alguien la modificó, se detiene.
 
 USO RÁPIDO
+  Al abrir, eliges el servicio: tecla 1–8 o clic. Para volver al menú:
+  botón de la casa en la barra, Alt+Inicio, o la bandeja → Menú principal.
+
   Mover ..................... arrastra el video (o Alt + arrastrar)
   Redimensionar ............. arrastra los bordes o las esquinas
   Botones ................... acerca el ratón al borde derecho
   Ayuda de atajos ........... F1
   Mostrar / ocultar ......... Ctrl+Alt+Y (funciona aunque esté oculto)
   Reproducir / pausar ....... Ctrl+Alt+P
+  Siguiente / anterior ...... Ctrl+Alt+N / Ctrl+Alt+B
+  ±10 segundos .............. Ctrl+Alt+→ / Ctrl+Alt+←
+  Volumen / silencio ........ Ctrl+Alt+↑ / Ctrl+Alt+↓ / Ctrl+Alt+M
   Salir ..................... Ctrl+Q, o clic derecho en el icono de la
                               bandeja → Salir
+
+BARRA DE MÚSICA (EN LA BARRA DE TAREAS)
+  Con YouTube Music abierto aparece sola dentro de la barra de tareas,
+  a la izquierda del reloj: portada, título, anterior/pausa/siguiente y
+  una onda de audio. También con Spotify, SoundCloud, Apple Music,
+  Deezer, TIDAL o Amazon Music abiertos con "Otro sitio".
+  Con otros servicios: clic en el icono de la bandeja con el reproductor
+  oculto (o bandeja → "Mostrar barra de controles"); se esconde sola.
+
+  La línea de abajo es el progreso: clic o arrastrar para moverte.
+  Rueda del ratón: volumen. Clic en la onda: silencio.
+  Clic en la portada: muestra el reproductor. Clic derecho: cierra la
+  barra. Arrastra el título para moverla por la barra de tareas.
+  No tapa los iconos de las apps (se estrecha), no le quita el foco al
+  juego o la app que estés usando y se esconde con apps a pantalla
+  completa. Para que no aparezca sola: bandeja → Ajustes → "Barra de
+  música en la barra de tareas".
+
+CON EL REPRODUCTOR OCULTO
+  Doble clic en el icono de la bandeja: muestra el reproductor.
+  Los atajos de arriba también funcionan oculto y muestran los controles
+  un par de segundos. El menú del icono (clic derecho) dice qué suena.
+
+NETFLIX, CRUNCHYROLL Y SIMILARES (DRM)
+  Estos servicios necesitan DRM (Widevine o PlayReady). El menú de inicio
+  comprueba si el motor de Windows (WebView2) lo tiene y lo dice abajo. Si
+  acabas de instalar, puede tardar unos minutos en descargarlo: pulsa
+  "Comprobar de nuevo". La calidad máxima es la misma que en Edge o
+  Chrome en este equipo.
+
+SOBRE JUEGOS Y APPS A PANTALLA COMPLETA
+  Con "Siempre visible" activo:
+  - Instalación normal: el reproductor vuelve a ponerse encima de los
+    juegos en "pantalla completa sin bordes" o "ventana a pantalla
+    completa" que lo tapen.
+  - Superposición máxima: usa la misma capa de Windows que el teclado en
+    pantalla, por encima de apps a pantalla completa, del menú Inicio y del
+    Administrador de tareas. Para eso el instalador:
+      * instala en C:\Program Files\YT Mini Player,
+      * crea un certificado local "YT Mini Player (firma local)", firma el
+        programa con él y borra la clave privada (no puede firmar nada más),
+      * quita la instalación normal para no tener dos copias.
+    "Desinstalar.cmd" lo deshace todo, certificado incluido. "Instalar.cmd"
+    vuelve a la versión normal.
+  En pantalla completa EXCLUSIVA ninguna ventana puede mostrarse encima:
+  cambia el juego a "sin bordes" o "ventana a pantalla completa".
 
 EXTENSIONES DE CHROME
   Menú "Más" (⋯) → Extensiones → Abrir carpeta. Copia ahí extensiones
   descomprimidas, archivos .crx o .zip, y pulsa "Recargar". Después
   recarga la página con F5.
+  Cada extensión nueva (o modificada) pide aprobación en una ventana de
+  Windows que muestra sus permisos; si puede leer todas las páginas, lo
+  avisa. Sin aprobar, no se carga.
   No hay Chrome Web Store: hay que conseguir el archivo de la extensión
   (muchas lo publican en GitHub). Las ventanas emergentes de los botones
   de extensión no existen en WebView2; si la extensión tiene página de
   opciones, se abre desde el menú.
 
+SEGURIDAD Y CUENTAS
+  Contraseñas: la app nunca las ve ni las guarda. Inicias sesión en la
+  página de cada servicio; el guardado de contraseñas y el autorrelleno
+  del motor están desactivados.
+  Sesiones: cifradas por el motor (AES-256-GCM, clave protegida por
+  Windows/DPAPI), igual que en Edge y Chrome.
+  Ajustes de la app (incluido el PIN): bóveda cifrada AES-256-GCM. Su
+  clave queda atada al chip de seguridad del equipo (TPM) y a tu cuenta
+  de Windows: una copia del disco no se puede abrir en otro equipo. Sin
+  avisos ni ventanas de Windows.
+  Disco entero (caché incluida): activa BitLocker o el cifrado del
+  dispositivo de Windows.
+  La versión 0.6.0 cifraba la carpeta con EFS y Windows pedía "hacer una
+  copia de seguridad del certificado": ya no se usa EFS y la app descifra
+  esa carpeta sola. Si vuelve a salir ese aviso, puedes elegir "Nunca".
+
+  Bandeja (clic derecho) → Seguridad:
+    - Bloquear con Windows Hello (huella, rostro o PIN de Windows), o
+    - Bloquear con PIN propio (se guarda solo un hash Argon2id). Si lo
+      olvidas: "¿Olvidaste el PIN?" lo quita verificándote con Windows
+      Hello; sin Windows Hello, hay que borrar las sesiones.
+      Se bloquea al abrir, al bloquear Windows (Win+L), al suspender,
+      tras 10 min oculta y con Ctrl+Alt+L.
+    - Cerrar sesión en todos los servicios (borra cookies y datos).
+    - Estado de la protección (resumen de todo lo anterior).
+
+  Navegación: SmartScreen activo; descargas bloqueadas; cámara,
+  micrófono, ubicación y notificaciones denegados; los enlaces a otros
+  sitios se abren en tu navegador. Las páginas no pueden dar órdenes a la
+  app (canal autenticado con un token secreto por sesión).
+
 DESINSTALAR
-  Doble clic en "Desinstalar.cmd". La sesión de Google y los ajustes se
-  conservan en %LOCALAPPDATA%\yt_mini_player; bórrala a mano si quieres
-  eliminarlos.
+  Doble clic en "Desinstalar.cmd" (quita ambas versiones). Las sesiones y
+  los ajustes se conservan en %LOCALAPPDATA%\yt_mini_player; bórrala a
+  mano si quieres eliminarlos.

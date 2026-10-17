@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Barra de música</title>
+<style>
+  /* Barra de música. Vive dentro de la barra de tareas (32–48 px de alto
+     según la versión de Windows y el DPI) o flota a 48 px. Todo se ajusta
+     a la altura de la ventana. */
+  :root {
+    --bg-1: #10152a;
+    --bg-2: #181d3a;
+    --lavender: #c2b3ff;
+    --lavender-dim: #8f84c9;
+    --track: #2f2c55;
+    --text: #f4f2ff;
+    --muted: #a8a2cc;
+    --wave-1: #5f86ff;
+    --wave-2: #a9bcff;
+    --display: "Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: linear-gradient(100deg, var(--bg-1) 0%, var(--bg-2) 100%);
+    color: var(--text); font: 12px/1.3 var(--body); -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; margin: 0; padding: 0; cursor: pointer; }
+  button:disabled { opacity: .3; cursor: default; }
+  svg { display: block; fill: currentColor; }
+  [hidden] { display: none !important; }
+
+  .bar {
+    position: relative; height: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 0 10px 2px 5px;
+  }
+
+  /* Portada: abre el reproductor. */
+  .art {
+    flex: none; position: relative; width: min(40px, calc(100vh - 10px)); aspect-ratio: 1;
+    border-radius: 5px; overflow: hidden; background: #232947; box-shadow: 0 1px 6px rgba(0, 0, 0, .35);
+  }
+  .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .art .empty, .art .open { position: absolute; inset: 0; display: grid; place-items: center; }
+  .art .empty { color: var(--lavender-dim); }
+  .art .empty svg { width: 55%; height: 55%; }
+  .art .open { color: #fff; background: rgba(16, 21, 42, .62); opacity: 0; transition: opacity .15s; }
+  .art .open svg { width: 50%; height: 50%; }
+  .art:hover .open { opacity: 1; }
+
+  /* Título arriba; abajo, el artista o (un momento) el volumen. */
+  .text { flex: 1; min-width: 0; display: grid; align-content: center; }
+  .title {
+    grid-row: 1; grid-column: 1; font: 600 13px/1.15 var(--display); letter-spacing: .01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .artist, .level {
+    grid-row: 2; grid-column: 1; margin-top: 1px; font-size: 11px; line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .15s;
+  }
+  .artist { color: var(--muted); font-style: italic; }
+  .level { color: var(--lavender); font-family: var(--display); font-variant-numeric: tabular-nums; opacity: 0; }
+  .text.show-level .artist { opacity: 0; }
+  .text.show-level .level { opacity: 1; }
+  /* Anclada: el texto es el asa para moverla por la barra de tareas. */
+  body.docked .text { cursor: grab; }
+  body.dragging, body.dragging * { cursor: grabbing !important; }
+
+  .controls { flex: none; display: flex; align-items: center; gap: 2px; }
+  .controls button {
+    width: min(30px, calc(100vh - 10px)); aspect-ratio: 1; border-radius: 6px; display: grid; place-items: center;
+    color: var(--text); transition: color .12s, background-color .12s, transform .12s;
+  }
+  .controls button:not(:disabled):hover { color: var(--lavender); background: rgba(194, 179, 255, .08); }
+  .controls button:not(:disabled):active { transform: scale(.9); }
+  .controls svg { width: 15px; height: 15px; }
+  .controls .play svg { width: 19px; height: 19px; }
+
+  /* Visualizador: decorativo mientras suena; con la rueda muestra el volumen. */
+  .wave {
+    flex: none; position: relative; width: 58px; height: min(30px, calc(100vh - 14px));
+    display: flex; align-items: center; justify-content: space-between; cursor: pointer;
+  }
+  .wave i {
+    width: 2px; height: 100%; border-radius: 1px;
+    background: linear-gradient(to top, var(--wave-1), var(--wave-2));
+    /* En pausa: la onda queda congelada y atenuada. */
+    transform: scaleY(calc(var(--h) * .32)); opacity: .55;
+    transition: transform .25s ease, background .2s, opacity .2s;
+  }
+  .wave.playing i { opacity: 1; animation: pulse var(--d) ease-in-out var(--delay) infinite alternate; }
+  @keyframes pulse {
+    from { transform: scaleY(calc(var(--h) * .28)); }
+    to { transform: scaleY(var(--h)); }
+  }
+  /* Medidor de volumen: barras en rampa, encendidas hasta el nivel. */
+  .wave.meter i { animation: none; opacity: 1; transform: scaleY(var(--ramp)); background: #3a4066; }
+  .wave.meter i.on { background: linear-gradient(to top, var(--lavender-dim), var(--lavender)); }
+  /* Silencio y "nada sonando" mandan sobre todo lo demás. */
+  .wave.muted i, .wave.muted.meter i, .wave.idle i {
+    animation: none; opacity: 1; background: #3a3f63; transform: scaleY(.16);
+  }
+  .wave .mute-icon {
+    position: absolute; inset: 0; display: grid; place-items: center; color: var(--lavender);
+    opacity: 0; transition: opacity .15s; pointer-events: none;
+  }
+  .wave .mute-icon svg { width: 15px; height: 15px; padding: 2px; box-sizing: content-box; border-radius: 4px; background: var(--bg-2); }
+  .wave.muted .mute-icon { opacity: 1; }
+  .wave.idle { cursor: default; }
+
+  /* Windows 10 no deja colorear el borde de la ventana: se dibuja aquí. */
+  body.css-border::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--lavender-dim);
+  }
+
+  /* Progreso: la línea lavanda del borde inferior. */
+  .progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: pointer;
+    display: flex; align-items: flex-end;
+  }
+  .progress .track { position: relative; width: 100%; height: 2px; background: var(--track); transition: height .12s; }
+  .progress .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--lavender); }
+  .progress:hover .track, .progress.dragging .track { height: 4px; }
+  .progress.disabled { cursor: default; }
+  .progress.live .fill { width: 100% !important; background: linear-gradient(90deg, var(--lavender-dim), var(--lavender)); }
+  .tip {
+    position: absolute; bottom: 7px; transform: translateX(-50%); padding: 1px 6px; border-radius: 5px;
+    background: #2a2f52; color: var(--text); font: 11px/1.3 var(--display); white-space: nowrap; pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Barra de tareas de Windows 10 (la barra mide ~32 px). */
+  @media (max-height: 35px) {
+    .bar { gap: 6px; }
+    .title { font-size: 12px; }
+    .artist, .level { font-size: 10.5px; margin-top: 0; }
+    .controls svg { width: 13px; height: 13px; }
+    .controls .play svg { width: 16px; height: 16px; }
+  }
+  /* Estrecha (para no tapar los iconos de las apps): sin la onda. */
+  @media (max-width: 300px) {
+    .wave { display: none; }
+    .bar { gap: 6px; }
+  }
+  /* Flotante (48 px). */
+  @media (min-height: 46px) {
+    .bar { gap: 10px; padding-left: 6px; }
+    .art { border-radius: 7px; }
+    .title { font-size: 14px; }
+    .artist, .level { font-size: 12px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wave.playing i { animation: none; transform: scaleY(calc(var(--h) * .6)); }
+    .wave i, .progress .track, .art .open, .controls button, .artist, .level { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <button class="art" id="art" type="button" title="Mostrar el reproductor (Ctrl+Alt+Y)" aria-label="Mostrar el reproductor">
+      <img id="artwork" alt="" hidden>
+      <span class="empty" id="empty" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
+      </span>
+      <span class="open" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-7 7"/><path d="M10 20H4v-6"/><path d="M4 20l7-7"/></svg>
+      </span>
+    </button>
+
+    <div class="text" id="text">
+      <div class="title" id="title">Nada sonando</div>
+      <div class="artist" id="artist">Toca la portada para abrir</div>
+      <div class="level" id="level" aria-live="polite"></div>
+    </div>
+
+    <div class="controls">
+      <button id="previous" type="button" title="Anterior (Ctrl+Alt+B)" aria-label="Anterior">
+        <svg viewBox="0 0 24 24"><path d="M5 5h2.4v14H5z"/><path d="M19 5.4v13.2L8.4 12z"/></svg>
+      </button>
+      <button class="play" id="toggle" type="button" title="Reproducir / pausar (Ctrl+Alt+P)" aria-label="Reproducir">
+        <svg viewBox="0 0 24 24" id="icon-play"><path d="M7 4.8v14.4L19 12z"/></svg>
+        <svg viewBox="0 0 24 24" id="icon-pause" hidden><path d="M6.5 4.5h3.6v15H6.5zM13.9 4.5h3.6v15h-3.6z"/></svg>
+      </button>
+      <button id="next" type="button" title="Siguiente (Ctrl+Alt+N)" aria-label="Siguiente">
+        <svg viewBox="0 0 24 24"><path d="M16.6 5H19v14h-2.4z"/><path d="M5 5.4v13.2L15.6 12z"/></svg>
+      </button>
+    </div>
+
+    <div class="wave" id="wave" role="button" title="Volumen: rueda del ratón · Clic: silenciar (Ctrl+Alt+M)" aria-label="Volumen">
+      <span class="mute-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.3 9.3l1.4-1.4 2.1 2.1 2.1-2.1 1.4 1.4-2.1 2.1 2.1 2.1-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg>
+      </span>
+    </div>
+
+    <div class="progress disabled" id="progress" title="Clic o arrastra para ir a otro punto (Ctrl+Alt+← / →: 10 s)">
+      <div class="track"><div class="fill" id="fill"></div></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* fuera de la app */ } };
+  const $ = (id) => document.getElementById(id);
+  // Funciona igual para HTML y SVG (los SVG no tienen la propiedad .hidden).
+  const show = (el, visible) => el.toggleAttribute('hidden', !visible);
+
+  const els = {
+    bar: $('bar'), artwork: $('artwork'), empty: $('empty'), text: $('text'), title: $('title'), artist: $('artist'),
+    level: $('level'), previous: $('previous'), toggle: $('toggle'), next: $('next'), play: $('icon-play'),
+    pause: $('icon-pause'), wave: $('wave'), progress: $('progress'), fill: $('fill'),
+  };
+
+  // --- Visualizador: 16 barras con forma de onda, cada una a su ritmo ----------
+  const BARS = 16;
+  const bars = [];
+  const muteIcon = els.wave.querySelector('.mute-icon');
+  for (let i = 0; i < BARS; i++) {
+    const bar = document.createElement('i');
+    const x = (i - (BARS - 1) / 2) / ((BARS - 1) / 2);           // -1 … 1
+    const peak = 0.38 + 0.62 * Math.exp(-2.2 * x * x);            // más altas al centro
+    bar.style.setProperty('--h', (peak * (0.8 + 0.2 * Math.abs(Math.sin(i * 1.7)))).toFixed(3));
+    bar.style.setProperty('--d', (0.42 + ((i * 37) % 23) / 60).toFixed(2) + 's');
+    bar.style.setProperty('--delay', (-((i * 53) % 29) / 40).toFixed(2) + 's');
+    bar.style.setProperty('--ramp', (0.22 + 0.78 * (i / (BARS - 1))).toFixed(3));
+    els.wave.insertBefore(bar, muteIcon);
+    bars.push(bar);
+  }
+
+  let media = {};
+  let docked = false;
+  let levelTimer = 0;
+  let meterTimer = 0;
+  let lastVolume = null;
+  let lastMuted = null;
+  let seeking = false;
+
+  function time(s) {
+    s = Math.max(0, Math.floor(Number(s) || 0));
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  // Un aviso corto en la línea del artista ("Volumen 65 %", "Silencio").
+  function flash(text) {
+    els.level.textContent = text;
+    els.text.classList.add('show-level');
+    clearTimeout(levelTimer);
+    levelTimer = setTimeout(() => els.text.classList.remove('show-level'), 1400);
+  }
+
+  // El volumen en las barras (y en texto) durante un momento.
+  function showVolume(percent) {
+    flash(percent === 0 ? 'Silencio' : `Volumen ${percent} %`);
+    if (els.wave.classList.contains('muted')) return;
+    const on = Math.round((percent / 100) * BARS);
+    bars.forEach((bar, i) => bar.classList.toggle('on', i < on));
+    els.wave.classList.add('meter');
+    clearTimeout(meterTimer);
+    meterTimer = setTimeout(() => els.wave.classList.remove('meter'), 1400);
+  }
+
+  function render(payload) {
+    media = (payload && payload.media) || {};
+    docked = !!(payload && payload.docked);
+    const source = (payload && payload.source) || '';
+    const has = !!media.hasMedia;
+    document.body.classList.toggle('docked', docked);
+    document.body.classList.toggle('css-border', !!(payload && payload.cssBorder));
+    els.text.title = docked ? 'Arrastra para moverla por la barra de tareas · Clic derecho: cerrar' : 'Clic derecho: cerrar';
+
+    els.title.textContent = has && media.title ? media.title : 'Nada sonando';
+    // Sitio fuera del catálogo: su dominio siempre a la vista.
+    const origin = (payload && payload.origin) || '';
+    els.artist.textContent = has
+      ? [media.live ? 'En directo' : '', media.artist || '', origin].filter(Boolean).join(' · ') || source
+      : source || origin || 'Toca la portada para abrir';
+
+    const art = has && media.artwork ? media.artwork : '';
+    if (els.artwork.dataset.src !== art) {
+      els.artwork.dataset.src = art;
+      show(els.artwork, !!art);
+      show(els.empty, !art);
+      if (art) els.artwork.src = art; else els.artwork.removeAttribute('src');
+    }
+
+    show(els.play, !media.playing);
+    show(els.pause, !!media.playing);
+    els.toggle.setAttribute('aria-label', media.playing ? 'Pausar' : 'Reproducir');
+    els.toggle.disabled = !has;
+    els.next.disabled = !(has && media.canNext);
+    els.previous.disabled = !(has && media.canPrevious);
+
+    const muted = has && (!!media.muted || media.volume === 0);
+    els.wave.classList.toggle('playing', has && !!media.playing && !muted);
+    els.wave.classList.toggle('muted', muted);
+    els.wave.classList.toggle('idle', !has);
+    if (muted || !has) els.wave.classList.remove('meter');
+    const percent = Math.round((Number(media.volume) || 0) * 100);
+    if (has && lastMuted !== null && muted !== lastMuted) {
+      flash(muted ? 'Silencio' : `Volumen ${percent} %`);
+    } else if (has && lastVolume !== null && percent !== lastVolume && !muted) {
+      showVolume(percent);
+    }
+    lastVolume = has ? percent : null;
+    lastMuted = has ? muted : null;
+
+    const duration = Number(media.duration) || 0;
+    const seekable = has && media.canSeek && duration > 0;
+    els.progress.classList.toggle('disabled', !seekable);
+    els.progress.classList.toggle('live', has && !!media.live);
+    if (!seeking) {
+      els.fill.style.width = seekable ? (100 * Math.min(1, (Number(media.position) || 0) / duration)) + '%' : '0%';
+    }
+  }
+
+  els.artwork.addEventListener('error', () => { show(els.artwork, false); show(els.empty, true); });
+
+  $('art').addEventListener('click', () => send('player:show'));
+  els.toggle.addEventListener('click', () => send('media:toggle'));
+  els.previous.addEventListener('click', () => send('media:previous'));
+  els.next.addEventListener('click', () => send('media:next'));
+  els.wave.addEventListener('click', () => { if (media.hasMedia) send('media:mute'); });
+
+  // La rueda del ratón, en cualquier parte, cambia el volumen.
+  window.addEventListener('wheel', (e) => {
+    if (!media.hasMedia) return;
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 5 : -5;
+    const current = media.muted ? 0 : Math.round((Number(media.volume) || 0) * 100);
+    els.wave.classList.remove('muted');
+    showVolume(Math.max(0, Math.min(100, current + step)));
+    send('media:volume-by:' + step);
+  }, { passive: false });
+
+  // Clic derecho en cualquier parte: cerrar.
+  window.addEventListener('contextmenu', (e) => { e.preventDefault(); send('mini:close'); });
+
+  // --- Progreso: clic o arrastre sobre la línea inferior ---------------------
+  let tip = null;
+  const canSeek = () => !!media.hasMedia && !!media.canSeek && Number(media.duration) > 0;
+  const ratioAt = (x) => {
+    const r = els.progress.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (x - r.left) / r.width));
+  };
+  function showTip(x) {
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'tip';
+      document.body.append(tip);
+    }
+    const ratio = ratioAt(x);
+    tip.textContent = `${time(ratio * media.duration)} / ${time(media.duration)}`;
+    const half = tip.offsetWidth / 2 + 4;
+    tip.style.left = Math.min(innerWidth - half, Math.max(half, x)) + 'px';
+  }
+  function hideTip() {
+    if (tip) { tip.remove(); tip = null; }
+  }
+  els.progress.addEventListener('pointermove', (e) => {
+    if (!canSeek()) return;
+    showTip(e.clientX);
+    if (seeking) els.fill.style.width = (100 * ratioAt(e.clientX)) + '%';
+  });
+  els.progress.addEventListener('pointerleave', () => { if (!seeking) hideTip(); });
+  els.progress.addEventListener('pointerdown', (e) => {
+    if (!canSeek() || e.button !== 0) return;
+    seeking = true;
+    els.progress.classList.add('dragging');
+    els.progress.setPointerCapture(e.pointerId);
+    els.fill.style.width = (100 * ratioAt(e.clientX)) + '%';
+    showTip(e.clientX);
+  });
+  els.progress.addEventListener('pointerup', (e) => {
+    if (!seeking) return;
+    seeking = false;
+    els.progress.classList.remove('dragging');
+    hideTip();
+    send('media:seek-to:' + Math.floor(ratioAt(e.clientX) * media.duration));
+  });
+
+  // --- Mover la barra por la barra de tareas -----------------------------------
+  // La página solo avisa de las fases; la posición la toma la app del cursor.
+  let press = null;
+  let movePending = false;
+  const isHandle = (target) => !target.closest('button, .wave, .progress');
+  els.bar.addEventListener('pointerdown', (e) => {
+    if (!docked || e.button !== 0 || !isHandle(e.target)) return;
+    press = { x: e.screenX, id: e.pointerId, dragging: false };
+  });
+  els.bar.addEventListener('pointermove', (e) => {
+    if (!press) return;
+    if (!press.dragging) {
+      if (Math.abs(e.screenX - press.x) < 4) return;
+      press.dragging = true;
+      document.body.classList.add('dragging');
+      try { els.bar.setPointerCapture(press.id); } catch (_) { /* ya soltó */ }
+      send('mini:drag:start');
+    }
+    if (!movePending) {
+      movePending = true;
+      requestAnimationFrame(() => {
+        movePending = false;
+        if (press && press.dragging) send('mini:drag:move');
+      });
+    }
+  });
+  const endDrag = () => {
+    if (press && press.dragging) {
+      document.body.classList.remove('dragging');
+      send('mini:drag:end');
+    }
+    press = null;
+  };
+  els.bar.addEventListener('pointerup', endDrag);
+  els.bar.addEventListener('pointercancel', endDrag);
+  els.bar.addEventListener('lostpointercapture', endDrag);
+
+  // Mientras el ratón está encima, la app no la oculta.
+  document.documentElement.addEventListener('mouseenter', () => send('mini:hover:1'));
+  document.documentElement.addEventListener('mouseleave', () => send('mini:hover:0'));
+
+  Object.defineProperty(window, '__ytmpMini', { value: render });
+  render(null);
+  send('mini:ready');
+})();
+</script>
+</body>
+</html>

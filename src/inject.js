@@ -1,7 +1,9 @@
 // Inyectado por el host en cada documento (ver webview.rs).
 //
 // Mover la ventana:
-// - Arrastrar sobre el video (más de DRAG_THRESHOLD px) → "drag".
+// - Arrastrar sobre el video (más de DRAG_THRESHOLD px) → "drag". Vale en
+//   YouTube y en cualquier sitio con un video grande (Netflix, Crunchyroll...).
+// - Zonas con el atributo data-ytmp-drag (menú de inicio) → "drag".
 //   Un clic sin mover sigue llegando a YouTube (pausa/reproduce).
 // - Alt + clic izquierdo en cualquier punto           → "drag".
 // - El asa de la barra lateral (ui.js)                 → "drag".
@@ -39,8 +41,10 @@
 
   const isFullscreen = () => !!document.fullscreenElement;
 
+  // Canal autenticado con la app: lo define el envoltorio de webview.rs
+  // (lleva un token de sesión que los scripts de la página no conocen).
   function send(message) {
-    try { window.ipc.postMessage(message); } catch (_) { /* fuera del host */ }
+    __ytmpSend(message);
   }
 
   // Devuelve la zona de redimensionado bajo (x, y) o null.
@@ -65,10 +69,36 @@
   }
 
   // ¿El punto de la pulsación es "superficie de video" arrastrable?
-  function isVideoSurface(target) {
-    if (isFullscreen() || !(target instanceof Element)) return false;
-    const player = target.closest('#movie_player, .html5-video-player');
-    return !!player && !target.closest(NOT_DRAGGABLE);
+  const IS_YOUTUBE = /(^|\.)youtube\.com$/.test(location.hostname);
+  // Controles genéricos de otros reproductores (Netflix, Crunchyroll...).
+  const GENERIC_CONTROLS = '[role="slider"], [role="menu"], [role="menuitem"], [role="dialog"], '
+    + '[role="listbox"], [role="option"], [role="tab"], label, summary';
+  // En otros servicios, un video "principal" ocupa al menos esta fracción.
+  const MIN_VIDEO_AREA = 0.2;
+
+  // Video grande bajo el punto (x, y), en cualquier sitio.
+  function videoAt(x, y) {
+    const minArea = innerWidth * innerHeight * MIN_VIDEO_AREA;
+    for (const video of document.querySelectorAll('video')) {
+      const r = video.getBoundingClientRect();
+      if (r.width * r.height >= minArea && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return video;
+      }
+    }
+    return null;
+  }
+
+  // ¿El punto de la pulsación es "superficie de video" arrastrable?
+  // Devuelve el elemento <video> correspondiente, o null.
+  function videoSurface(target, x, y) {
+    if (isFullscreen() || !(target instanceof Element)) return null;
+    if (target.closest(NOT_DRAGGABLE)) return null;
+    if (IS_YOUTUBE) {
+      const player = target.closest('#movie_player, .html5-video-player');
+      return player ? player.querySelector('video') || player : null;
+    }
+    if (target.closest(GENERIC_CONTROLS)) return null;
+    return videoAt(x, y);
   }
 
   // --- Cursor: se resuelve localmente, sin IPC -----------------------------
@@ -119,6 +149,8 @@
   // pointerdown se dispara antes que mousedown; con preventDefault aquí
   // Chromium tampoco emite los mousedown/mouseup de compatibilidad.
   window.addEventListener('pointerdown', (e) => {
+    // Solo el ratón real: un evento sintético de la página no mueve la ventana.
+    if (!e.isTrusted) return;
     swallowClick = false;
     pending = null;
     if (e.pointerType !== 'mouse' || e.button !== 0) return;
@@ -135,9 +167,18 @@
       send('resize:' + zone);
       return;
     }
-    if (isVideoSurface(e.target)) {
-      // No se consume: si no hay movimiento, es un clic normal de YouTube.
-      const video = document.querySelector('#movie_player video, .html5-video-player video');
+    // Zonas marcadas por la propia app (cabecera del menú de inicio):
+    // se arrastran al instante.
+    if (e.target instanceof Element && e.target.closest('[data-ytmp-drag]')
+      && !e.target.closest('button, a, input, select, textarea, [role="switch"]')) {
+      consume(e);
+      startDrag();
+      return;
+    }
+    const surface = videoSurface(e.target, e.clientX, e.clientY);
+    if (surface) {
+      // No se consume: si no hay movimiento, es un clic normal del sitio.
+      const video = surface instanceof HTMLVideoElement ? surface : null;
       pending = {
         x: e.clientX, y: e.clientY, target: e.target,
         video, rate: video ? video.playbackRate : null,
@@ -196,6 +237,6 @@
     if (e.altKey || zoneAt(e.clientX, e.clientY)) consume(e);
   }, { capture: true });
 
-  // Expuesto para el asa de la barra lateral (ui.js).
-  Object.defineProperty(window, '__ytmpStartDrag', { value: startDrag });
+  // Para el asa de la barra lateral (ui.js), sin exponerlo a la página.
+  __ytmpShared.startDrag = startDrag;
 })();

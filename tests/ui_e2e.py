@@ -15,6 +15,9 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from bundle import HOST_KEY, add_app_scripts  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHOTS = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
 EXT_ID = "cjpalhdlnbpafiamejdnhcphjbkeiagm"
@@ -22,28 +25,44 @@ EXT_ID = "cjpalhdlnbpafiamejdnhcphjbkeiagm"
 MOCK_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Video - YouTube</title>
 <style>
+  /* Estructura y "trampas" de apilamiento parecidas a las de YouTube:
+     cabecera fija, margen superior de 56 px, dos columnas, contenedores
+     con z-index propio y un transform que cambia el bloque contenedor. */
   body { margin: 0; background: #0f0f0f; color: #fff; font-family: sans-serif; }
-  #masthead-container { height: 56px; background: #212121; display: flex; align-items: center; padding: 0 16px; }
+  #masthead-container { position: fixed; top: 0; left: 0; right: 0; z-index: 2020; height: 56px; background: #212121; display: flex; align-items: center; padding: 0 16px; }
   #masthead-container input { width: 50%; }
-  ytd-watch-flexy { display: block; padding: 16px; }
+  ytd-page-manager { display: block; margin-top: 56px; }
+  ytd-watch-flexy { display: block; transform: translateZ(0); }
+  #columns { display: flex; gap: 16px; padding: 16px; }
+  #primary { flex: 1; min-width: 0; }
+  #player { position: relative; z-index: 0; }
   #movie_player { position: relative; width: 100%; aspect-ratio: 16/9; background: #000; overflow: hidden; }
   #movie_player video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: linear-gradient(135deg,#2b3a67,#0f0f0f); }
   .ytp-chrome-bottom { position: absolute; left: 12px; right: 12px; bottom: 0; height: 40px; display: flex; align-items: center; justify-content: flex-end; }
   .ytp-fullscreen-button { width: 40px; height: 32px; }
-  #below { padding: 16px 0; }
+  #below { position: relative; z-index: 1; padding: 16px 0; }
+  #secondary { position: relative; z-index: 1; width: 160px; }
+  #secondary .thumb { height: 70px; margin-bottom: 8px; background: #c33; }
 </style></head>
 <body>
   <ytd-app>
     <div id="masthead-container"><input id="search" placeholder="Buscar"></div>
-    <ytd-watch-flexy>
-      <div id="player-container">
-        <div id="movie_player" class="html5-video-player">
-          <div class="html5-video-container"><video class="html5-main-video"></video></div>
-          <div class="ytp-chrome-bottom"><button class="ytp-fullscreen-button">⛶</button></div>
+    <ytd-page-manager>
+      <ytd-watch-flexy>
+        <div id="columns">
+          <div id="primary">
+            <div id="player">
+              <div id="movie_player" class="html5-video-player">
+                <div class="html5-video-container"><video class="html5-main-video"></video></div>
+                <div class="ytp-chrome-bottom"><button class="ytp-fullscreen-button">⛶</button></div>
+              </div>
+            </div>
+            <div id="below"><h1 id="title">Título del video</h1><p>Descripción y comentarios…</p></div>
+          </div>
+          <div id="secondary"><div class="thumb"></div><div class="thumb"></div><div class="thumb"></div></div>
         </div>
-      </div>
-      <div id="below"><h1>Título del video</h1><p>Descripción y comentarios…</p></div>
-    </ytd-watch-flexy>
+      </ytd-watch-flexy>
+    </ytd-page-manager>
   </ytd-app>
 <script>
   // Simulación mínima del reproductor de YouTube.
@@ -112,9 +131,8 @@ def main():
             )
 
         page.route("https://www.youtube.com/**", serve)
-        page.add_init_script(IPC_STUB)
-        for name in ("inject.js", "ui.js", "maintenance.js"):
-            page.add_init_script(path=str(ROOT / "src" / name))
+        # Mismo envoltorio y orden que webview.rs.
+        add_app_scripts(page)
 
         def sent():
             return page.evaluate("window.__sent.slice()")
@@ -123,7 +141,7 @@ def main():
             page.evaluate("window.__sent.length = 0")
 
         def sync():
-            page.evaluate(f"window.__ytmpSync({json.dumps(host)})")
+            page.evaluate(f"window.__ytmpSync({json.dumps(HOST_KEY)}, {json.dumps(host)})")
 
         def shot(name):
             if SHOTS:
@@ -172,7 +190,7 @@ def main():
         y0 = top + 5 + 16
         ys = {}
         y = y0
-        for key in ["grip", "back", "sep", "videoOnly", "fullscreen", "pinned", "hide", "sep", "more", "quit"]:
+        for key in ["grip", "home", "back", "sep", "videoOnly", "fullscreen", "pinned", "hide", "sep", "more", "quit"]:
             if key == "sep":
                 y += 7 + 2
                 continue
@@ -281,17 +299,42 @@ def main():
         print("Solo video")
         host["videoOnly"] = True
         sync()
-        page.wait_for_timeout(200)
+        page.wait_for_timeout(250)
         rect = page.evaluate("(() => { const r = document.getElementById('movie_player').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()")
         check(rect == [0, 0, 640, 360], f"el reproductor ocupa toda la ventana ({rect})")
-        check(page.evaluate("getComputedStyle(document.getElementById('masthead-container')).display") == "none", "se oculta la cabecera")
+        in_player = """([x, y]) => { const el = document.elementFromPoint(x, y);
+          return !!el && !!el.closest('#movie_player'); }"""
+        for name, point in [("cabecera", (300, 20)), ("título", (60, 330)), ("recomendaciones", (560, 120)),
+                            ("esquina", (5, 355))]:
+            check(page.evaluate(in_player, list(point)), f"solo video: en la zona de {name} se ve el reproductor")
         page.mouse.move(630, 180)
         page.wait_for_timeout(300)
         shot("4-solo-video")
+        check(page.evaluate("document.elementFromPoint(611, 180)?.tagName") == "YTMP-UI",
+              "solo video: la barra sigue encima del reproductor")
+        clear()
+        before = page.evaluate("window.playerClicks")
+        page.mouse.click(540, 120)
+        check(page.evaluate("window.playerClicks") == before + 1, "solo video: un clic donde estaban las recomendaciones llega al reproductor")
+
+        print("Solo video + pantalla completa")
+        page.evaluate("document.getElementById('movie_player').requestFullscreen()")
+        page.wait_for_timeout(300)
+        check(not page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"),
+              "en pantalla completa se desactiva el CSS de solo video")
+        page.evaluate("document.exitFullscreen()")
+        page.wait_for_timeout(300)
+        check(page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"),
+              "al salir de pantalla completa vuelve el modo solo video")
+        check(page.evaluate(in_player, [60, 330]), "y el contenido sigue oculto")
+
         host["videoOnly"] = False
         sync()
         page.wait_for_timeout(100)
         check(not page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"), "se desactiva al sincronizar")
+        check(page.evaluate("!!document.elementFromPoint(300, 20)?.closest('#masthead-container')")
+              and page.evaluate("!!document.elementFromPoint(560, 120)?.closest('#secondary')"),
+              "sin solo video, la página vuelve a la normalidad")
 
         print("Pantalla completa")
         clear()
@@ -311,7 +354,7 @@ def main():
         check("fullscreen:0" in sent(), "avisa al host de la salida")
 
         print("Avisos y multimedia")
-        page.evaluate("window.__ytmpToast('Siempre visible: activado')")
+        page.evaluate(f"window.__ytmpToast({json.dumps(HOST_KEY)}, 'Siempre visible: activado')")
         page.wait_for_timeout(250)
         shot("5-aviso")
         page.evaluate("window.__ytmpMedia('toggle')")

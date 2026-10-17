@@ -1,0 +1,8 @@
+# cargo audit: avisos que no afectan al ejecutable de Windows.
+[advisories]
+ignore = [
+    # proc-macro-error (sin mantenimiento) y glib (unsound): solo entran al
+    # compilar para Linux (gtk, a través de wry/tao). El .exe no los incluye.
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0429",
+]

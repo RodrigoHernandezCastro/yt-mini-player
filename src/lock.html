@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bloqueado</title>
+<style>
+  :root {
+    --bg-1: #0d1124;
+    --bg-2: #171c38;
+    --card: rgba(255, 255, 255, .04);
+    --line: rgba(194, 179, 255, .18);
+    --lavender: #c2b3ff;
+    --lavender-dim: #8f84c9;
+    --text: #f4f2ff;
+    --muted: #a8a2cc;
+    --danger: #ff9aa8;
+    --display: "Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: grid; place-items: center; overflow: hidden; user-select: none;
+    background: radial-gradient(120% 90% at 50% 0%, var(--bg-2), var(--bg-1));
+    color: var(--text); font: 13px/1.4 var(--body); -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+  main { width: min(340px, 100vw - 32px); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+  .badge {
+    width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; flex: none;
+    background: linear-gradient(140deg, rgba(194, 179, 255, .22), rgba(95, 134, 255, .12));
+    border: 1px solid var(--line); color: var(--lavender);
+  }
+  .badge svg { width: 22px; height: 22px; }
+  h1 { margin: 0; font: 600 17px/1.2 var(--display); letter-spacing: .01em; }
+  .sub { margin: -4px 0 2px; color: var(--muted); }
+  form { width: 100%; display: flex; flex-direction: column; gap: 8px; margin: 0; }
+  input {
+    width: 100%; height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--line);
+    background: rgba(0, 0, 0, .25); color: var(--text); font: 15px var(--body); letter-spacing: .12em; text-align: center;
+    outline: none; user-select: text;
+  }
+  input:focus { border-color: var(--lavender-dim); box-shadow: 0 0 0 3px rgba(194, 179, 255, .15); }
+  input::placeholder { letter-spacing: normal; color: #6f6a92; }
+  .buttons { display: flex; gap: 8px; width: 100%; }
+  button {
+    flex: 1; height: 36px; border-radius: 9px; border: 1px solid var(--line); cursor: pointer;
+    background: var(--card); color: var(--text); font: 600 13px var(--display); letter-spacing: .02em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  button.primary { background: linear-gradient(180deg, #cdbfff, #a996f5); color: #18143a; border-color: transparent; }
+  button:disabled { opacity: .5; cursor: default; }
+  button svg { width: 16px; height: 16px; }
+  .status { min-height: 1.4em; color: var(--muted); font-size: 12px; }
+  .status.error { color: var(--danger); }
+  .hint { color: #7d779f; font-size: 11.5px; }
+  .link { flex: none; height: auto; border: 0; background: none; color: var(--lavender-dim); font: 12px var(--body); text-decoration: underline; cursor: pointer; padding: 2px; }
+  .link:hover { color: var(--lavender); }
+  /* Ventana muy pequeña: solo lo esencial. */
+  @media (max-height: 230px) {
+    .sub, .hint { display: none; }
+    .badge { width: 32px; height: 32px; border-radius: 10px; }
+    main { gap: 6px; }
+    h1 { font-size: 14px; }
+    input, button { height: 30px; }
+  }
+  /* La ventana más pequeña (256×144): sin icono ni estado vacío. */
+  @media (max-height: 170px) {
+    .badge, .link { display: none; }
+    h1 { font-size: 13px; }
+    main { gap: 5px; }
+    form { gap: 5px; }
+    .status:empty { display: none; }
+    input, button { height: 28px; }
+  }
+</style>
+</head>
+<body>
+  <main>
+    <div class="badge" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>
+    </div>
+    <h1 id="title">YT Mini Player está bloqueado</h1>
+    <p class="sub" id="sub">Desbloquéalo para seguir viendo.</p>
+
+    <div class="buttons" id="hello-box">
+      <button type="button" class="primary" id="hello">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 10v1M15 10v1M9.5 15.5c1.4 1 3.6 1 5 0"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
+        Usar Windows Hello
+      </button>
+    </div>
+
+    <form id="pin-form" autocomplete="off">
+      <input id="pin" type="password" inputmode="numeric" maxlength="64" placeholder="PIN" aria-label="PIN" autocomplete="off" spellcheck="false">
+      <input id="pin2" type="password" inputmode="numeric" maxlength="64" placeholder="Repite el PIN" aria-label="Repite el PIN" autocomplete="off" spellcheck="false" hidden>
+      <div class="buttons">
+        <button type="button" id="cancel" hidden>Cancelar</button>
+        <button type="submit" class="primary" id="submit">Desbloquear</button>
+      </div>
+    </form>
+    <div class="buttons" id="cancel-box" hidden><button type="button" id="cancel2">Cancelar</button></div>
+
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <button type="button" class="link" id="forgot" hidden>¿Olvidaste el PIN?</button>
+    <div class="hint" id="hint" hidden>Mínimo 6 caracteres; ni repetidos (111111) ni seguidos (123456). Se guarda solo un hash Argon2id, cifrado.</div>
+  </main>
+
+<script>
+(() => {
+  'use strict';
+  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* fuera de la app */ } };
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    title: $('title'), sub: $('sub'), helloBox: $('hello-box'), hello: $('hello'), form: $('pin-form'),
+    pin: $('pin'), pin2: $('pin2'), submit: $('submit'), cancel: $('cancel'), cancelBox: $('cancel-box'),
+    status: $('status'), hint: $('hint'),
+  };
+  let state = { stage: 'unlock', method: 'hello', busy: false, error: null, wait: 0, canCancel: false };
+  let waitTimer = 0;
+
+  function setStatus(text, error) {
+    els.status.textContent = text || '';
+    els.status.classList.toggle('error', !!error);
+  }
+
+  function render() {
+    const s = state;
+    const newPin = s.stage === 'new-pin';
+    const usePin = newPin || s.method === 'pin';
+    els.title.textContent = newPin ? 'Crea un PIN para la app'
+      : s.stage === 'verify' ? 'Confirma que eres tú' : 'YT Mini Player está bloqueado';
+    els.sub.textContent = newPin ? 'Lo pedirá al abrir la app y al volver de la pantalla de bloqueo.'
+      : s.stage === 'verify' ? 'Para cambiar el bloqueo hay que verificarte.' : 'Desbloquéalo para seguir viendo.';
+    els.helloBox.hidden = usePin;
+    els.form.hidden = !usePin;
+    els.pin2.hidden = !newPin;
+    els.hint.hidden = !newPin;
+    els.pin.placeholder = newPin ? 'Nuevo PIN' : 'PIN';
+    els.submit.textContent = newPin ? 'Guardar PIN' : s.stage === 'verify' ? 'Confirmar' : 'Desbloquear';
+    els.cancel.hidden = !s.canCancel || !usePin;
+    $('forgot').hidden = !(s.stage === 'unlock' && s.method === 'pin');
+    $('forgot').disabled = s.busy;
+    els.cancelBox.hidden = !s.canCancel || usePin;
+
+    const waiting = s.wait > 0;
+    els.hello.disabled = s.busy;
+    els.submit.disabled = s.busy || waiting;
+    els.pin.disabled = s.busy || waiting;
+    els.pin2.disabled = s.busy || waiting;
+
+    clearInterval(waitTimer);
+    if (waiting) {
+      let left = Math.ceil(s.wait);
+      const tick = () => {
+        setStatus(`Demasiados intentos. Espera ${left} s.`, true);
+        if (left-- <= 0) { clearInterval(waitTimer); state.wait = 0; render(); }
+      };
+      tick();
+      waitTimer = setInterval(tick, 1000);
+    } else if (s.error) {
+      setStatus(s.error, true);
+    } else if (s.busy) {
+      setStatus(usePin ? 'Comprobando…' : 'Esperando a Windows Hello…');
+    } else {
+      setStatus('');
+    }
+    if (usePin && !s.busy && !waiting) els.pin.focus();
+  }
+
+  els.hello.addEventListener('click', () => { if (!state.busy) send('lock:hello'); });
+  els.form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (state.busy || state.wait > 0) return;
+    const pin = els.pin.value;
+    if (!pin) return;
+    if (state.stage === 'new-pin') {
+      if (pin !== els.pin2.value) {
+        setStatus('Los dos PIN no coinciden', true);
+        els.pin2.value = '';
+        els.pin2.focus();
+        return;
+      }
+      send('lock:new-pin:' + pin);
+    } else {
+      send('lock:pin:' + pin);
+    }
+    // El PIN no se queda en la página.
+    els.pin.value = '';
+    els.pin2.value = '';
+  });
+  $('forgot').addEventListener('click', () => { if (!state.busy) send('lock:forgot'); });
+  for (const button of [els.cancel, $('cancel2')]) {
+    button.addEventListener('click', () => send('lock:cancel'));
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.canCancel) send('lock:cancel');
+  });
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  Object.defineProperty(window, '__ytmpLock', {
+    value: (next) => { state = Object.assign({}, state, next); render(); },
+  });
+  render();
+  send('lock:ready');
+})();
+</script>
+</body>
+</html>

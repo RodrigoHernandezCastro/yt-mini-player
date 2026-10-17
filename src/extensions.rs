@@ -11,6 +11,13 @@
 //!
 //! No se usa `with_extensions_path` de wry porque intenta instalar *cualquier*
 //! entrada de la carpeta y, si una falla, aborta la creación del webview.
+//!
+//! Seguridad: la carpeta la puede escribir cualquier programa del usuario, y
+//! una extensión ve las páginas (y las sesiones) donde se ejecuta. Por eso
+//! cada extensión tiene una **huella SHA-256** de todo su contenido y solo se
+//! carga si el usuario la aprobó en un diálogo del sistema que muestra sus
+//! permisos (app.rs). Si cambia un solo byte, se vuelve a preguntar. Al
+//! descomprimir se limitan el número de archivos y el tamaño total.
 
 use std::{
     fs,
@@ -20,10 +27,14 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Carpeta (dentro de la de extensiones) donde se apartan los `.crx`/`.zip`
 /// ya descomprimidos. Empieza por punto para que el escaneo la ignore.
 const ARCHIVE_DIR: &str = ".archivos";
+/// Límites al descomprimir (contra "bombas ZIP").
+const MAX_ENTRIES: usize = 10_000;
+const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
 
 /// Extensión válida encontrada en disco.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +47,12 @@ pub struct LocalExtension {
     pub version: String,
     /// Página de opciones o, si no hay, la ventana emergente del botón.
     pub page: Option<String>,
+    /// Permisos y sitios a los que accede (del manifest).
+    pub permissions: Vec<String>,
+    /// ¿Puede leer y cambiar todas las páginas?
+    pub all_sites: bool,
+    /// SHA-256 (hex) de todo su contenido.
+    pub fingerprint: String,
 }
 
 /// Resultado de preparar la carpeta de extensiones.
@@ -110,11 +127,21 @@ pub fn scan(dir: &Path) -> Scan {
             scan.problems.push(format!("«{folder}» no tiene manifest.json"));
             continue;
         };
-        match read_manifest(&root) {
-            Ok((name, version, page)) => {
-                scan.extensions.push(LocalExtension { folder, path: root, name, version, page })
-            }
-            Err(err) => scan.problems.push(format!("«{folder}»: {err}")),
+        let manifest = read_manifest(&root);
+        let fingerprint = fingerprint(&base);
+        match (manifest, fingerprint) {
+            (Ok(m), Ok(fingerprint)) => scan.extensions.push(LocalExtension {
+                folder,
+                path: root,
+                name: m.name,
+                version: m.version,
+                page: m.page,
+                all_sites: m.permissions.iter().any(|p| is_all_sites(p)),
+                permissions: m.permissions,
+                fingerprint,
+            }),
+            (Err(err), _) => scan.problems.push(format!("«{folder}»: {err}")),
+            (_, Err(err)) => scan.problems.push(format!("«{folder}»: no se pudo leer ({err})")),
         }
     }
     scan
@@ -210,12 +237,19 @@ pub fn crx_payload(bytes: &[u8]) -> Result<&[u8], String> {
 /// Extrae un ZIP en `dest`, rechazando rutas que escapen de la carpeta.
 fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ZIP inválido: {e}"))?;
+    if archive.len() > MAX_ENTRIES {
+        return Err(format!("el ZIP tiene demasiados archivos (más de {MAX_ENTRIES})"));
+    }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    // Presupuesto total: se cuenta lo que realmente sale al descomprimir (los
+    // tamaños declarados en el ZIP pueden mentir).
+    let mut budget = MAX_UNPACKED;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| format!("ZIP inválido: {e}"))?;
         // `enclosed_name` descarta rutas absolutas y con `..`.
         let Some(relative) = file.enclosed_name() else {
-            return Err(format!("ruta no permitida en el ZIP: {}", file.name()));
+            let name = file.name().map(|n| n.into_owned()).unwrap_or_default();
+            return Err(format!("ruta no permitida en el ZIP: {name}"));
         };
         let out = dest.join(relative);
         if file.is_dir() {
@@ -225,7 +259,11 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut writer = fs::File::create(&out).map_err(|e| e.to_string())?;
-            io::copy(&mut file, &mut writer).map_err(|e| e.to_string())?;
+            let written = io::copy(&mut io::Read::take(&mut file, budget + 1), &mut writer).map_err(|e| e.to_string())?;
+            if written > budget {
+                return Err(format!("el ZIP descomprimido supera {} MB", MAX_UNPACKED / (1024 * 1024)));
+            }
+            budget -= written;
         }
     }
     Ok(())
@@ -249,8 +287,63 @@ fn manifest_root(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Lee nombre, versión y página de opciones/emergente del manifest.
-fn read_manifest(root: &Path) -> Result<(String, String, Option<String>), String> {
+/// Lo que importa del manifest.
+struct Manifest {
+    name: String,
+    version: String,
+    page: Option<String>,
+    permissions: Vec<String>,
+}
+
+/// Patrones que dan acceso a todas las páginas.
+fn is_all_sites(pattern: &str) -> bool {
+    matches!(pattern, "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*" | "*://*/" | "file:///*")
+}
+
+/// Huella SHA-256 de una carpeta: rutas relativas (ordenadas, con `/`),
+/// tamaños y contenido de cada archivo. Cambia si cambia cualquier byte.
+pub fn fingerprint(dir: &Path) -> io::Result<String> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in fs::read_dir(&current)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(io::Error::other("contiene enlaces simbólicos"));
+            }
+            if kind.is_dir() {
+                stack.push(entry.path());
+            } else {
+                files.push(entry.path());
+            }
+        }
+        if files.len() > MAX_ENTRIES {
+            return Err(io::Error::other("demasiados archivos"));
+        }
+    }
+    let relative = |p: &Path| {
+        p.strip_prefix(dir).unwrap_or(p).components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+    };
+    files.sort_by_key(|p| relative(p));
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    for path in files {
+        let bytes = fs::read(&path)?;
+        total += bytes.len() as u64;
+        if total > MAX_UNPACKED {
+            return Err(io::Error::other("demasiado grande"));
+        }
+        hasher.update(relative(&path).as_bytes());
+        hasher.update([0]);
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Lee nombre, versión, página de opciones/emergente y permisos del manifest.
+fn read_manifest(root: &Path) -> Result<Manifest, String> {
     let text = fs::read_to_string(root.join("manifest.json")).map_err(|e| e.to_string())?;
     // Algunos manifest traen BOM.
     let manifest: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
@@ -273,7 +366,26 @@ fn read_manifest(root: &Path) -> Result<(String, String, Option<String>), String
     .find(|p| !p.is_empty() && !p.contains("..") && !p.contains("://"))
     .map(str::to_owned);
 
-    Ok((name, version, page))
+    // Permisos (v2 mezcla sitios y APIs en "permissions"; v3 los separa) y
+    // sitios donde inyecta scripts.
+    let mut permissions: Vec<String> = ["/permissions", "/host_permissions", "/optional_host_permissions"]
+        .into_iter()
+        .filter_map(|p| manifest.pointer(p)?.as_array().cloned())
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    if let Some(scripts) = manifest.get("content_scripts").and_then(Value::as_array) {
+        for script in scripts {
+            if let Some(matches) = script.get("matches").and_then(Value::as_array) {
+                permissions.extend(matches.iter().filter_map(|m| m.as_str().map(str::to_owned)));
+            }
+        }
+    }
+    permissions.sort();
+    permissions.dedup();
+    permissions.truncate(64);
+
+    Ok(Manifest { name, version, page, permissions })
 }
 
 /// Resuelve `__MSG_clave__` con `_locales/<default_locale>/messages.json`.
@@ -686,7 +798,59 @@ mod tests {
             r#"{"name":"X","version":"1","options_page":"https://evil.com/x","action":{"default_popup":"../up.html"}}"#,
         )
         .unwrap();
-        assert_eq!(read_manifest(&dir).unwrap().2, None);
+        assert_eq!(read_manifest(&dir).unwrap().page, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fingerprint_and_permissions() {
+        let dir = temp_dir("fp");
+        fs::create_dir_all(dir.join("ext/js")).unwrap();
+        fs::write(
+            dir.join("ext/manifest.json"),
+            r#"{"manifest_version":3,"name":"Lector","version":"1","permissions":["storage","tabs"],
+                "host_permissions":["https://*.youtube.com/*"],"content_scripts":[{"matches":["<all_urls>"],"js":["js/a.js"]}]}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("ext/js/a.js"), "console.log(1)").unwrap();
+        let first = scan(&dir);
+        let ext = &first.extensions[0];
+        assert_eq!(ext.fingerprint.len(), 64);
+        assert_eq!(ext.permissions, ["<all_urls>", "https://*.youtube.com/*", "storage", "tabs"]);
+        assert!(ext.all_sites);
+        // Misma carpeta → misma huella; un byte distinto → otra huella.
+        assert_eq!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
+        fs::write(dir.join("ext/js/a.js"), "console.log(2)").unwrap();
+        assert_ne!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
+        // Mover un archivo de sitio también cambia la huella.
+        fs::write(dir.join("ext/js/a.js"), "console.log(1)").unwrap();
+        fs::rename(dir.join("ext/js/a.js"), dir.join("ext/a.js")).unwrap();
+        assert_ne!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn zip_bombs_are_rejected() {
+        let dir = temp_dir("bomb");
+        // 300 MB de ceros comprimen a casi nada.
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            zip.start_file("manifest.json", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(MANIFEST.as_bytes()).unwrap();
+            zip.start_file("relleno.bin", zip::write::SimpleFileOptions::default()).unwrap();
+            let chunk = vec![0u8; 1024 * 1024];
+            for _ in 0..300 {
+                zip.write_all(&chunk).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = buf.into_inner();
+        assert!(bytes.len() < 2 * 1024 * 1024, "el ZIP comprimido es pequeño ({})", bytes.len());
+        fs::write(dir.join("bomba.zip"), bytes).unwrap();
+        let scan = scan(&dir);
+        assert!(scan.extensions.is_empty());
+        assert!(scan.problems.iter().any(|p| p.contains("supera")), "{:?}", scan.problems);
         fs::remove_dir_all(&dir).unwrap();
     }
 

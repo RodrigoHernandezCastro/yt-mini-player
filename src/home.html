@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT Mini Player</title>
+<style>
+  :root {
+    --ink: #141826;
+    --panel: #1d2236;
+    --line: #262c45;
+    --line-strong: #2f3756;
+    --text: #eef0f8;
+    --muted: #9aa3c2;
+    --dim: #5d6690;
+    --accent: #8fa6ff;
+    --ok: #6fd39a;
+    --warn: #e8b85c;
+    --display: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--text); }
+  body {
+    font: 13px/1.4 var(--body);
+    -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column; min-height: 100vh;
+    padding: 0 16px 12px;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { background: none; border: 0; margin: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Cabecera: también sirve para arrastrar la ventana. */
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 40px 8px 0; cursor: grab; user-select: none;
+  }
+  h1 {
+    margin: 0; font: 600 22px/1.1 var(--display); letter-spacing: 0.01em;
+  }
+  .startup { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .switch {
+    flex: none; width: 30px; height: 18px; border-radius: 9px; background: #3a4163; position: relative;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+    background: #fff; transition: transform .15s;
+  }
+  .startup[aria-checked="true"] .switch { background: #6c8cff; }
+  .startup[aria-checked="true"] .switch::after { transform: translateX(12px); }
+
+  /* Guía de canales: filas separadas por líneas, no tarjetas. */
+  .guide {
+    display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px;
+    border-top: 1px solid var(--line);
+  }
+  .channel {
+    position: relative; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 2px 10px;
+    width: 100%; min-height: 50px; padding: 7px 8px 7px 10px; text-align: left;
+    border-bottom: 1px solid var(--line);
+  }
+  .channel::before {
+    content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px;
+    background: var(--brand); opacity: .35;
+  }
+  .channel:hover, .channel:focus-visible { background: #1a1f31; }
+  .channel:hover::before, .channel:focus-visible::before { opacity: 1; }
+  .channel:focus-visible { outline-offset: -2px; }
+  .num {
+    grid-row: 1 / span 2; font: 600 26px/1 var(--display); color: var(--dim);
+    font-variant-numeric: tabular-nums; text-align: center;
+  }
+  .channel:hover .num, .channel:focus-visible .num { color: var(--text); }
+  .name { font: 600 17px/1.15 var(--display); }
+  .caption { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .caption.warn { color: var(--warn); }
+  .last { grid-row: 1 / span 2; grid-column: 3; color: var(--accent); font-size: 11.5px; }
+  .channel[aria-busy="true"] .caption { color: var(--accent); }
+
+  footer { margin-top: auto; padding-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  form { display: flex; gap: 8px; }
+  label.site { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  input[type="url"], input[type="text"] {
+    flex: 1; min-width: 0; width: 100%; height: 32px; padding: 0 10px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line-strong); color: var(--text);
+  }
+  input::placeholder { color: var(--dim); }
+  .open {
+    height: 32px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: var(--ink); font-weight: 600;
+  }
+  .open:hover { background: #a6b8ff; }
+  .status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; color: var(--muted); font-size: 12px; }
+  .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); transform: translateY(-1px); }
+  .status[data-state="ok"] .dot { background: var(--ok); }
+  .status[data-state="missing"] .dot { background: var(--warn); }
+  .status .text { flex: 1; min-width: 0; }
+  .recheck { color: var(--accent); font-size: 12px; white-space: nowrap; }
+  .recheck:hover { text-decoration: underline; }
+
+  @media (max-width: 560px) {
+    .guide { grid-template-columns: 1fr; }
+    header { flex-wrap: wrap; }
+  }
+  @media (max-height: 300px) {
+    .channel { min-height: 40px; padding-top: 4px; padding-bottom: 4px; }
+    .caption { display: none; }
+    .num { font-size: 22px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+</style>
+</head>
+<body>
+  <header data-ytmp-drag>
+    <h1>¿Qué vemos?</h1>
+    <button class="startup" id="startup" type="button" role="switch" aria-checked="false"
+      title="Al abrir la app, entrar directo al último servicio en lugar de este menú">
+      <span>Abrir el último al iniciar</span><span class="switch" aria-hidden="true"></span>
+    </button>
+  </header>
+
+  <main class="guide" id="guide" aria-label="Servicios"></main>
+
+  <footer>
+    <form id="site" autocomplete="off">
+      <label class="site" for="site-url">Otro sitio</label>
+      <input id="site-url" type="text" inputmode="url" spellcheck="false"
+        placeholder="Otro sitio: escribe una dirección, p. ej. plex.tv/web">
+      <button class="open" type="submit">Abrir</button>
+    </form>
+    <p class="status" id="drm" data-state="checking" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="text">Comprobando el DRM…</span>
+      <button class="recheck" type="button" id="recheck" hidden>Comprobar de nuevo</button>
+    </p>
+  </footer>
+
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
+<script>
+(() => {
+  'use strict';
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  // Canal autenticado que la app solo da a su propia página (webview.rs).
+  const send = (m) => { if (typeof window.__ytmpHomeSend === 'function') window.__ytmpHomeSend(m); };
+  const guide = document.getElementById('guide');
+  const startup = document.getElementById('startup');
+  const rows = new Map();
+  let drm = null; // null = sin comprobar; { widevine, playready }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function caption(service) {
+    if (service.drm && drm && !drm.widevine && !drm.playready) {
+      return { text: 'Necesita DRM (no disponible aún)', warn: true };
+    }
+    return { text: service.caption, warn: false };
+  }
+
+  function render() {
+    guide.replaceChildren();
+    rows.clear();
+    data.services.forEach((service, i) => {
+      const key = i + 1;
+      const row = el('button', 'channel');
+      row.type = 'button';
+      row.style.setProperty('--brand', service.accent);
+      row.dataset.id = service.id;
+      row.title = `Abrir ${service.name} (tecla ${key})`;
+      const cap = caption(service);
+      const capEl = el('span', 'caption' + (cap.warn ? ' warn' : ''), cap.text);
+      row.append(el('span', 'num', String(key)), el('span', 'name', service.name), capEl);
+      if (service.id === data.lastService) row.append(el('span', 'last', 'Último'));
+      row.addEventListener('click', () => open(service.id));
+      guide.append(row);
+      rows.set(service.id, { row, capEl, service });
+    });
+    startup.setAttribute('aria-checked', String(!!data.startWithLast));
+  }
+
+  function open(id) {
+    const entry = rows.get(id);
+    if (!entry) return;
+    entry.row.setAttribute('aria-busy', 'true');
+    entry.capEl.textContent = 'Abriendo…';
+    send('service:' + id);
+  }
+
+  // Teclas 1–8 abren el servicio; no mientras se escribe una dirección.
+  window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+    if (e.target instanceof HTMLInputElement) return;
+    const match = /^Digit([1-9])$/.exec(e.code) || /^Numpad([1-9])$/.exec(e.code);
+    if (!match) return;
+    const service = data.services[Number(match[1]) - 1];
+    if (!service) return;
+    e.preventDefault();
+    open(service.id);
+  });
+
+  startup.addEventListener('click', () => {
+    data.startWithLast = !data.startWithLast;
+    startup.setAttribute('aria-checked', String(data.startWithLast));
+    send('start-with-last:' + (data.startWithLast ? 1 : 0));
+  });
+
+  document.getElementById('site').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const value = document.getElementById('site-url').value.trim();
+    if (value) send('open-url:' + value);
+  });
+
+  // Estado que la app envía después (ui.js lo reenvía como evento).
+  window.addEventListener('ytmp:state', (e) => {
+    const s = e.detail || {};
+    let changed = false;
+    if ('startWithLast' in s && s.startWithLast !== data.startWithLast) { data.startWithLast = s.startWithLast; changed = true; }
+    if ('lastService' in s && s.lastService !== data.lastService) { data.lastService = s.lastService; changed = true; }
+    if (changed) render();
+  });
+
+  // --- Comprobación de DRM -----------------------------------------------
+  // Solo pregunta al motor si tiene el módulo; no reproduce nada.
+  const status = document.getElementById('drm');
+  const statusText = status.querySelector('.text');
+  const recheck = document.getElementById('recheck');
+
+  function probe(keySystem, robustness) {
+    if (!navigator.requestMediaKeySystemAccess) return Promise.resolve(false);
+    const config = [{
+      initDataTypes: ['cenc'],
+      audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"', robustness }],
+      videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"', robustness }],
+    }];
+    const ask = navigator.requestMediaKeySystemAccess(keySystem, config).then(() => true, () => false);
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 6000));
+    return Promise.race([ask, timeout]);
+  }
+
+  async function checkDrm() {
+    status.dataset.state = 'checking';
+    statusText.textContent = 'Comprobando el DRM…';
+    recheck.hidden = true;
+    const [widevine, playready] = await Promise.all([
+      probe('com.widevine.alpha', 'SW_SECURE_CRYPTO'),
+      probe('com.microsoft.playready.recommendation', ''),
+    ]);
+    drm = { widevine, playready };
+    if (widevine || playready) {
+      const which = [widevine && 'Widevine', playready && 'PlayReady'].filter(Boolean).join(' y ');
+      status.dataset.state = 'ok';
+      statusText.textContent = `DRM listo (${which}): los servicios protegidos pueden reproducir.`;
+    } else {
+      status.dataset.state = 'missing';
+      statusText.textContent = 'Sin DRM por ahora: tras instalar, el motor puede tardar unos minutos en descargarlo.';
+      recheck.hidden = false;
+    }
+    render();
+  }
+  recheck.addEventListener('click', checkDrm);
+
+  render();
+  checkDrm();
+})();
+</script>
+</body>
+</html>

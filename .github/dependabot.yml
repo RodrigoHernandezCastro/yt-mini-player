@@ -1,0 +1,14 @@
+# Avisos semanales de dependencias nuevas (y de seguridad, en cuanto salen).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

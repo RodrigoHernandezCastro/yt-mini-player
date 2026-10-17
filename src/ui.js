@@ -16,18 +16,19 @@
   Object.defineProperty(window, '__ytmpUi', { value: true });
 
   const IS_YOUTUBE = /(^|\.)youtube\.com$/.test(location.hostname);
+  // Pantalla de inicio de la app (selector de servicios).
+  const IS_HOME = location.hostname === 'ytmp.localhost';
   const REVEAL_ZONE = 64;   // px desde el borde derecho que muestran la barra
   const HIDE_DELAY = 1200;  // ms antes de ocultarla al alejarse
   const TOAST_MS = 3500;
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
-  const send = (message) => {
-    try { window.ipc.postMessage(message); } catch (_) { /* fuera del host */ }
-  };
+  // Canal autenticado con la app (token de sesión, ver webview.rs).
+  const send = (message) => __ytmpSend(message);
 
   let state = {
     version: '', pinned: true, videoOnly: false, opacity: 100, ghost: false,
-    fullscreen: false, autostart: false, tray: true,
+    fullscreen: false, autostart: false, tray: true, overlay: false,
     extensions: [], extensionProblems: [], extensionsError: null, hotkeys: [],
   };
 
@@ -41,7 +42,9 @@
       if (value === null || value === undefined || value === false) continue;
       if (key === 'class') el.className = value;
       else if (key === 'text') el.textContent = value;
-      else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
+      // Solo eventos reales del usuario: la página no puede pulsar
+      // nuestros botones con eventos sintéticos.
+      else if (key.startsWith('on')) el.addEventListener(key.slice(2), (e) => { if (e.isTrusted) value(e); });
       else el.setAttribute(key, value === true ? '' : String(value));
     }
     for (const child of children.flat()) {
@@ -81,6 +84,7 @@
   const ICONS = {
     grip: () => icon([], [[9, 6], [15, 6], [9, 12], [15, 12], [9, 18], [15, 18]]),
     back: () => icon(['M15 18l-6-6 6-6']),
+    home: () => icon(['M4 11.5L12 5l8 6.5', 'M6.5 10v9h11v-9', 'M10 19v-5h4v5']),
     videoOnly: () => icon(['M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'], [], ['M10 9l5 3-5 3z']),
     fullscreen: () => icon(['M4 9V4h5', 'M20 9V4h-5', 'M4 15v5h5', 'M20 15v5h-5']),
     exitFullscreen: () => icon(['M9 4v5H4', 'M15 4v5h5', 'M9 20v-5H4', 'M15 20v-5h5']),
@@ -238,24 +242,31 @@
   `;
 
   // Modo solo video: el reproductor ocupa toda la ventana en /watch.
+  //
+  // No se puede confiar en z-index: YouTube crea varios contextos de
+  // apilamiento entre el reproductor y la raíz, y su contenido se pintaría
+  // encima. En su lugar, todo lo que no es el reproductor se vuelve
+  // invisible (visibility no pinta ni recibe clics) y el reproductor se fija
+  // a la ventana. Los antepasados con transform/filter/contain, que
+  // cambiarían a qué se refiere "fixed", se neutralizan desde JS.
+  const VO_CLASS = 'ytmp-video-only';
+  const VO_CHAIN = 'ytmp-vo-chain';
+  const PLAYER = '#movie_player';
   const VIDEO_ONLY_CSS = `
-    html.ytmp-video-only, html.ytmp-video-only body { overflow: hidden !important; }
-    html.ytmp-video-only #masthead-container,
-    html.ytmp-video-only ytd-masthead,
-    html.ytmp-video-only tp-yt-app-drawer,
-    html.ytmp-video-only ytd-mini-guide-renderer { display: none !important; }
-    html.ytmp-video-only ytd-app,
-    html.ytmp-video-only ytd-page-manager,
-    html.ytmp-video-only ytd-watch-flexy,
-    html.ytmp-video-only #player-container,
-    html.ytmp-video-only #player-container-outer,
-    html.ytmp-video-only #player-container-inner { transform: none !important; contain: none !important; }
-    html.ytmp-video-only #movie_player {
-      position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important;
+    html.${VO_CLASS}, html.${VO_CLASS} body { overflow: hidden !important; background: #000 !important; }
+    html.${VO_CLASS} body *:not(${PLAYER}):not(${PLAYER} *) { visibility: hidden !important; }
+    html.${VO_CLASS} .${VO_CHAIN} {
+      transform: none !important; filter: none !important; backdrop-filter: none !important;
+      perspective: none !important; contain: none !important; will-change: auto !important;
+    }
+    html.${VO_CLASS} ${PLAYER} {
+      visibility: visible !important;
+      position: fixed !important; inset: 0 !important; margin: 0 !important;
+      width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important;
       z-index: 2147483000 !important; background: #000 !important;
     }
-    html.ytmp-video-only #movie_player .html5-video-container { width: 100% !important; height: 100% !important; }
-    html.ytmp-video-only #movie_player video.html5-main-video {
+    html.${VO_CLASS} ${PLAYER} .html5-video-container { width: 100% !important; height: 100% !important; }
+    html.${VO_CLASS} ${PLAYER} video.html5-main-video {
       width: 100% !important; height: 100% !important; left: 0 !important; top: 0 !important;
       object-fit: contain !important;
     }
@@ -271,13 +282,34 @@
 
   const isWatch = () => IS_YOUTUBE && location.pathname === '/watch';
 
+  // Marca los antepasados del reproductor que convertirían "fixed" en
+  // relativo a ellos (transform, filter, contain...). Se recalcula cada vez
+  // porque YouTube mueve el reproductor entre contenedores (cine, normal).
+  function markPlayerChain(player) {
+    for (const el of document.querySelectorAll('.' + VO_CHAIN)) el.classList.remove(VO_CHAIN);
+    for (let el = player && player.parentElement; el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (cs.transform !== 'none' || cs.filter !== 'none' || cs.perspective !== 'none'
+        || (cs.backdropFilter && cs.backdropFilter !== 'none')
+        || (cs.contain && cs.contain !== 'none')
+        || /transform|filter|perspective/.test(cs.willChange || '')) {
+        el.classList.add(VO_CHAIN);
+      }
+    }
+  }
+
   function applyVideoOnly() {
     const root = document.documentElement;
     if (!root) return;
     ensureDocumentSheet();
-    const on = !!state.videoOnly && isWatch();
-    if (root.classList.contains('ytmp-video-only') === on) return;
-    root.classList.toggle('ytmp-video-only', on);
+    const player = document.querySelector(PLAYER);
+    // En pantalla completa manda YouTube: su propio diseño ya muestra solo
+    // el video, y mezclar ambos rompe la página.
+    const on = !!state.videoOnly && isWatch() && !!player && !document.fullscreenElement;
+    if (on) markPlayerChain(player);
+    if (root.classList.contains(VO_CLASS) === on) return;
+    root.classList.toggle(VO_CLASS, on);
+    if (!on) for (const el of document.querySelectorAll('.' + VO_CHAIN)) el.classList.remove(VO_CHAIN);
     // Que el reproductor recalcule el tamaño de sus controles.
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   }
@@ -297,29 +329,9 @@
     else document.documentElement.requestFullscreen().catch(() => {});
   }
 
+  // Menú principal (selector de servicios).
   function goHome() {
-    location.href = 'https://www.youtube.com/';
-  }
-
-  // Controles multimedia para los atajos globales (Ctrl+Alt+P/N/B).
-  function media(action) {
-    const player = document.getElementById('movie_player');
-    if (player && typeof player.getPlayerState === 'function') {
-      if (action === 'toggle') {
-        if (player.getPlayerState() === 1) player.pauseVideo();
-        else player.playVideo();
-      } else if (action === 'next' && typeof player.nextVideo === 'function') {
-        player.nextVideo();
-      } else if (action === 'previous' && typeof player.previousVideo === 'function') {
-        player.previousVideo();
-      }
-      return;
-    }
-    const video = document.querySelector('video');
-    if (video && action === 'toggle') {
-      if (video.paused) video.play().catch(() => {});
-      else video.pause();
-    }
+    send('home');
   }
 
   // ---------------------------------------------------------------------------
@@ -334,7 +346,7 @@
   const SHORTCUTS = [
     { keys: 'F11', label: 'Pantalla completa', match: (e) => e.key === 'F11' && noMods(e), run: toggleFullscreen },
     { keys: 'Ctrl+T', label: 'Siempre visible', match: (e) => onlyCtrl(e) && letter(e, 't'), run: () => send('pin') },
-    { keys: 'Ctrl+M', label: 'Solo video', match: (e) => onlyCtrl(e) && letter(e, 'm'), run: () => send('video-only') },
+    { keys: 'Ctrl+M', label: 'Solo video (YouTube)', match: (e) => IS_YOUTUBE && onlyCtrl(e) && letter(e, 'm'), run: () => send('video-only') },
     { keys: 'Ctrl+H', label: 'Ocultar en la bandeja', match: (e) => onlyCtrl(e) && letter(e, 'h'), run: () => send('hide') },
     { keys: 'Ctrl+L', label: 'Abrir el enlace de YouTube copiado', match: (e) => onlyCtrl(e) && letter(e, 'l'), run: () => send('open-clipboard') },
     {
@@ -347,7 +359,7 @@
       match: (e) => e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && /^Digit[1-4]$/.test(e.code),
       run: (e) => send('corner:' + { Digit1: 'nw', Digit2: 'ne', Digit3: 'sw', Digit4: 'se' }[e.code]),
     },
-    { keys: 'Alt+Inicio', label: 'Inicio de YouTube', match: (e) => e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'Home', run: goHome },
+    { keys: 'Alt+Inicio', label: 'Menú principal (elegir servicio)', match: (e) => e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'Home', run: goHome },
     { keys: 'Alt+← / Alt+→', label: 'Atrás / adelante' },
     { keys: 'F5', label: 'Recargar la página' },
     { keys: 'F1', label: 'Esta ayuda', match: (e) => e.key === 'F1' && noMods(e), run: () => toggleHelp() },
@@ -363,7 +375,7 @@
   ];
 
   window.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.repeat) return;
+    if (!e.isTrusted || e.isComposing || e.repeat) return;
     if (e.key === 'Escape' && (menuOpen || helpOpen)) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -416,14 +428,15 @@
 
     const grip = barButton('grip', 'Mover (también puedes arrastrar el video)', ICONS.grip, null, { class: 'grip' });
     grip.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
+      if (!e.isTrusted || e.button !== 0) return;
       e.preventDefault();
-      if (typeof window.__ytmpStartDrag === 'function') window.__ytmpStartDrag();
+      if (typeof __ytmpShared.startDrag === 'function') __ytmpShared.startDrag();
       else send('drag');
     });
 
     bar = h('div', { class: 'bar', role: 'toolbar', 'aria-label': 'YT Mini Player' },
       grip,
+      barButton('home', 'Menú principal (Alt+Inicio)', ICONS.home, goHome),
       barButton('back', 'Atrás (Alt+←)', ICONS.back, () => history.back(), { secondary: true }),
       h('div', { class: 'sep', 'data-secondary': true }),
       barButton('videoOnly', 'Solo video (Ctrl+M)', ICONS.videoOnly, () => send('video-only'), { secondary: true }),
@@ -576,7 +589,7 @@
     panel.replaceChildren(
       section('Ventana',
         toggleRow('Siempre visible', 'Ctrl+T', state.pinned, () => send('pin')),
-        toggleRow('Solo video', 'Ctrl+M', state.videoOnly, () => send('video-only'),
+        IS_YOUTUBE && toggleRow('Solo video', 'Ctrl+M', state.videoOnly, () => send('video-only'),
           isWatch() ? null : 'Se aplica al abrir un video'),
         actionRow(document.fullscreenElement ? 'Salir de pantalla completa' : 'Pantalla completa', 'F11',
           () => { closeMenu(); toggleFullscreen(); }),
@@ -601,12 +614,14 @@
           'Los clics atraviesan la ventana'),
       ),
       section('Navegar',
-        actionRow('Inicio de YouTube', 'Alt+Inicio', () => { closeMenu(); goHome(); }),
+        !IS_HOME && actionRow('Menú principal', 'Alt+Inicio', () => { closeMenu(); goHome(); }),
         actionRow('Abrir enlace copiado', 'Ctrl+L', () => { closeMenu(); send('open-clipboard'); }),
-        actionRow('Recargar la página', 'F5', () => location.reload()),
+        !IS_HOME && actionRow('Recargar la página', 'F5', () => location.reload()),
       ),
       section('Extensiones', ...extensionRows()),
       section('Aplicación',
+        state.overlay && h('div', { class: 'row' }, h('span', { class: 'label' }, 'Superposición máxima activa',
+          h('span', { class: 'sub', text: 'Con "Siempre visible", queda encima de apps a pantalla completa' }))),
         toggleRow('Iniciar con Windows', null, state.autostart, () => send('autostart'), 'Arranca oculto en la bandeja'),
         actionRow('Atajos de teclado', 'F1', () => { closeMenu(); openHelp(); }),
         state.tray && actionRow('Ocultar en la bandeja', 'Ctrl+H', () => { closeMenu(); send('hide'); }),
@@ -679,6 +694,11 @@
     barButtons.pinned.classList.toggle('on', !!state.pinned);
     barButtons.videoOnly.classList.toggle('on', !!state.videoOnly);
     barButtons.hide.hidden = !state.tray;
+    // Cada botón solo donde tiene sentido.
+    barButtons.home.hidden = IS_HOME;
+    barButtons.back.hidden = IS_HOME;
+    barButtons.fullscreen.hidden = IS_HOME;
+    barButtons.videoOnly.hidden = !IS_YOUTUBE;
     const fs = !!document.fullscreenElement;
     barButtons.fullscreen.replaceChildren(fs ? ICONS.exitFullscreen() : ICONS.fullscreen());
     const fsTitle = fs ? 'Salir de pantalla completa (F11)' : 'Pantalla completa (F11)';
@@ -688,13 +708,25 @@
     if (menuOpen) renderMenu();
   }
 
-  function sync(next) {
+  // Solo la app puede llamarlas: la primera comparación (estricta, sin
+  // ejecutar código de la página) descarta cualquier otra llamada.
+  function sync(key, next) {
+    if (key !== __ytmpHostKey) return;
     state = Object.assign({}, state, next);
     applyVideoOnly();
     render();
+    // La pantalla de inicio escucha esto para reflejar los ajustes. A otros
+    // sitios no se les cuentan (extensiones instaladas, ajustes...).
+    if (IS_HOME) window.dispatchEvent(new CustomEvent('ytmp:state', { detail: state }));
+  }
+
+  function hostToast(key, message) {
+    if (key !== __ytmpHostKey) return;
+    toast(message);
   }
 
   document.addEventListener('fullscreenchange', () => {
+    applyVideoOnly();
     placeHost();
     render();
     send('fullscreen:' + (document.fullscreenElement ? 1 : 0));
@@ -706,8 +738,7 @@
   }
 
   Object.defineProperty(window, '__ytmpSync', { value: sync });
-  Object.defineProperty(window, '__ytmpToast', { value: toast });
-  Object.defineProperty(window, '__ytmpMedia', { value: media });
+  Object.defineProperty(window, '__ytmpToast', { value: hostToast });
 
   function start() {
     mount();

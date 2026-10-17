@@ -1,0 +1,45 @@
+# Versión publicada: se compila en GitHub (no en el equipo de nadie), se
+# publican las huellas SHA-256 y una atestación de procedencia firmada
+# (Sigstore) que prueba qué commit y qué workflow produjeron cada archivo:
+#   gh attestation verify YT-Mini-Player-<versión>-win64.zip --repo <dueño>/<repo>
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write      # subir los archivos a la versión
+  id-token: write      # firmar la atestación (OIDC)
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Pruebas
+        run: cargo test --locked
+      - name: Auditoría de dependencias
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
+      - name: Compilar y empaquetar (normal + superposición máxima)
+        shell: pwsh
+        run: ./tools/package.ps1
+      - name: Atestación de procedencia
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/YT-Mini-Player-*-win64.zip
+            dist/YT-Mini-Player-*-win64/*.exe
+      - name: Publicar
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem dist/YT-Mini-Player-*-win64.zip | Select-Object -First 1
+          $sums = Join-Path $zip.DirectoryName 'SHA256SUMS.txt'
+          "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $zip.FullName).Hash.ToLowerInvariant(), $zip.Name | Set-Content $sums
+          gh release create $env:GITHUB_REF_NAME $zip.FullName $sums --title "YT Mini Player $env:GITHUB_REF_NAME" --generate-notes
