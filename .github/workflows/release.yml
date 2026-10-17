@@ -39,7 +39,7 @@ jobs:
           YTMP_LS_PORTAL: ${{ vars.YTMP_LS_PORTAL }}
         run: ./tools/package.ps1
       - name: Atestación de procedencia
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/YT-Mini-Player-*-win64.zip
