@@ -17,27 +17,27 @@ http = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Cifrado (RustCrypto, auditados): AES-256-GCM para la bóveda, Argon2id para
 # el PIN, SHA-256 para huellas de extensiones; claves borradas de memoria.
-aes-gcm = { version = "0.10", features = ["zeroize"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = { version = "0.5", features = ["std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 zeroize = "1"
-getrandom = "0.3"
+getrandom = "0.4"
 # Mi música: HTTP (Internet Archive, Lemon Squeezy), etiquetas, decodificación
 # y huella acústica (Chromaprint en Rust puro) para detectar duplicados.
-ureq = { version = "2.12", default-features = false, features = ["json"] }
-lofty = "0.22"
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
+ureq = { version = "3.4", default-features = false, features = ["json"] }
+lofty = "0.25"
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
 rusty-chromaprint = "0.3"
 walkdir = "2.5"
-sha1 = "0.10"
-base64 = "0.22"
+sha1 = "0.11"
+base64 = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 # TLS del sistema (SChannel): certificados y políticas de Windows.
 ureq = { version = "2.12", default-features = false, features = ["json", "native-tls"] }
 native-tls = "0.2"
 tray-icon = "0.26"
-global-hotkey = "0.8"
+global-hotkey = "0.9"
 webview2-com = "0.39"
 windows = { version = "0.62", features = [
     "Foundation",
@@ -49,7 +49,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
 ] }
-windows-future = "0.3"
+windows-future = "0.100"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
