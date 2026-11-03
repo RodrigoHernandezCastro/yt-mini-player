@@ -174,20 +174,27 @@ export class Room extends DurableObject {
 
   // --- Connecting ---------------------------------------------------------
 
+  // A storage call keeps other events out of the room until it returns;
+  // hashing (crypto.subtle) does not. So each connection hashes first and
+  // only then reads, checks and writes the room's storage, with nothing in
+  // between that lets a kick, an alarm or another connection in: otherwise
+  // two guests could get the same member id (or a sixth seat), a guest
+  // kicked while coming back could have its seat written back, and a host
+  // could connect to a room that had just ended.
   async fetch(request) {
     const role = request.headers.get('X-Relay-Role');
     const room = request.headers.get('X-Relay-Room') || '';
-    const meta = await this.ctx.storage.get('meta');
-    if (role === 'host') return this.connectHost(request, room, meta);
-    if (role === 'guest') return this.connectGuest(meta);
-    if (role === 'rejoin') return this.rejoin(request, meta);
+    if (role === 'host') return this.connectHost(request, room);
+    if (role === 'guest') return this.connectGuest();
+    if (role === 'rejoin') return this.rejoin(request);
     return text(400, 'bad request');
   }
 
-  async connectHost(request, room, meta) {
+  async connectHost(request, room) {
     const token = request.headers.get('X-Ytmp-Host') || '';
     if (!HEX64.test(token)) return text(403, 'bad token');
     const hash = await sha256(token);
+    let meta = await this.ctx.storage.get('meta');
     if (!meta) {
       meta = { room, hostHash: hash, next: 1 };
       await this.ctx.storage.put('meta', meta);
@@ -207,7 +214,10 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async connectGuest(meta) {
+  async connectGuest() {
+    const ticket = randomHex(32);
+    const ticketHash = await sha256(ticket);
+    const meta = await this.ctx.storage.get('meta');
     if (!meta) return text(404, 'no such room');
     const host = this.host();
     if (!host) return text(503, 'host away');
@@ -215,8 +225,7 @@ export class Room extends DurableObject {
     if (Object.keys(seats).length >= MAX_GUESTS) return text(409, 'room full');
     const member = `g${meta.next}`;
     meta.next += 1;
-    const ticket = randomHex(32);
-    seats[member] = { ticket: await sha256(ticket), until: 0 };
+    seats[member] = { ticket: ticketHash, until: 0 };
     await this.ctx.storage.put({ meta, seats });
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server, [member]);
@@ -226,13 +235,16 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async rejoin(request, meta) {
-    if (!meta) return text(404, 'no such room');
+  async rejoin(request) {
     const member = request.headers.get('X-Ytmp-Member') || '';
     const ticket = request.headers.get('X-Ytmp-Ticket') || '';
+    const valid = MEMBER.test(member) && HEX64.test(ticket);
+    const ticketHash = valid ? await sha256(ticket) : null;
+    const meta = await this.ctx.storage.get('meta');
+    if (!meta) return text(404, 'no such room');
     const seats = (await this.ctx.storage.get('seats')) || {};
-    const seat = MEMBER.test(member) && HEX64.test(ticket) ? seats[member] : null;
-    if (!seat || seat.ticket !== (await sha256(ticket))) return text(403, 'no seat');
+    const seat = valid ? seats[member] : null;
+    if (!seat || seat.ticket !== ticketHash) return text(403, 'no seat');
     for (const old of this.sockets(member)) this.close(old, 4002, 'replaced');
     seat.until = 0;
     await this.ctx.storage.put('seats', seats);
