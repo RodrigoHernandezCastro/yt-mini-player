@@ -4,13 +4,19 @@
 //   npm install && npm test
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 const HERE = fileURLToPath(new URL('..', import.meta.url));
+const WINDOWS = process.platform === 'win32';
+// This folder's wrangler, run by this same node: no shell and no `npx`
+// (on Windows that is npx.cmd, which spawn cannot start by itself).
+const WRANGLER = joinPath(HERE, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const PORT = 8790 + Math.floor(Math.random() * 90);
 // Short graces so the tests do not wait two minutes.
 const HOST_GRACE_MS = 3000;
@@ -183,6 +189,20 @@ test('guests join by lookup, talk only to the host, and a sixth does not fit', a
   assert.equal(await refused(base, `/v1/join/${lookup}`), 404, 'the code is gone with the room');
 });
 
+test('guests joining at the same moment get different seats, and never a sixth', async (base) => {
+  const { host } = await startHost(base);
+  const { lookup } = await advertise(host);
+  // Eight at once: five get in (each with its own member id), three are told the room is full.
+  const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => join(base, lookup)));
+  const joined = attempts.filter((a) => a.status === 'fulfilled').map((a) => a.value);
+  const members = joined.map((j) => j.you.member);
+  assert.equal(new Set(members).size, members.length, `no member id twice: ${members}`);
+  assert.equal(joined.length, 5, `host + 5 guests: ${members}`);
+  assert.ok(attempts.filter((a) => a.status === 'rejected').every((a) => a.reason.status === 409));
+  for (const { guest } of joined) guest.close();
+  host.send({ op: 'end' });
+});
+
 test('removing a guest closes it and frees its seat', async (base) => {
   const { host } = await startHost(base);
   const { lookup } = await advertise(host);
@@ -338,34 +358,71 @@ test('the relay never sees codes, only lookups', async () => {
   assert.equal(sha('ytmp-together/lookup/v1PTQ7K20NPW5J'), '0314231bc05e38b86467399c7b5a597df14639b1cc0f690c7e937f072f77a01c');
 });
 
-async function main() {
-  let base = process.env.RELAY;
-  let child = null;
-  if (!base) {
-    child = spawn(
-      'npx',
-      ['wrangler', 'dev', '--ip', '127.0.0.1', '--port', String(PORT), '--var', `HOST_GRACE_MS:${HOST_GRACE_MS}`, '--var', `GUEST_GRACE_MS:${GUEST_GRACE_MS}`],
-      // Its own process group, so wrangler and workerd stop with it.
-      { cwd: HERE, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } },
-    );
-    let log = '';
-    child.stdout.on('data', (d) => (log += d));
-    child.stderr.on('data', (d) => (log += d));
-    base = `ws://127.0.0.1:${PORT}`;
-    const deadline = Date.now() + 60_000;
-    for (;;) {
-      try {
-        if ((await fetch(`http://127.0.0.1:${PORT}/v1/health`)).ok) break;
-      } catch {
-        // Not up yet.
-      }
-      if (Date.now() > deadline) {
-        console.error(log);
-        throw new Error('wrangler dev did not start');
-      }
-      await sleep(300);
+// The local relay, while it runs (stopped however the tests end).
+let child = null;
+
+// Stops wrangler and the workerd it started. Elsewhere they share a process
+// group (one signal reaches both); Windows has none, so the whole tree goes
+// by id, or workerd would keep running (and holding the port) afterwards.
+function stopRelay() {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (WINDOWS) {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  } else {
+    try {
+      process.kill(-child.pid, 'SIGINT');
+    } catch {
+      child.kill('SIGINT');
     }
   }
+  child = null;
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    stopRelay();
+    process.exit(130);
+  });
+}
+
+async function startRelay() {
+  if (!existsSync(WRANGLER)) throw new Error(`wrangler is not installed in ${HERE} (run npm install first)`);
+  child = spawn(
+    process.execPath,
+    [WRANGLER, 'dev', '--ip', '127.0.0.1', '--port', String(PORT), '--var', `HOST_GRACE_MS:${HOST_GRACE_MS}`, '--var', `GUEST_GRACE_MS:${GUEST_GRACE_MS}`],
+    {
+      cwd: HERE,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Its own process group (not on Windows, where it would only open a console window).
+      detached: !WINDOWS,
+      windowsHide: true,
+      env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
+    },
+  );
+  let log = '';
+  let failure = null;
+  child.stdout.on('data', (d) => (log += d));
+  child.stderr.on('data', (d) => (log += d));
+  child.on('error', (err) => (failure = err));
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${PORT}/v1/health`)).ok) return `ws://127.0.0.1:${PORT}`;
+    } catch {
+      // Not up yet.
+    }
+    // No point waiting a minute for one that could not start or already ended.
+    const ended = failure || (child.exitCode !== null ? `wrangler dev exited with code ${child.exitCode}` : null);
+    if (ended || Date.now() > deadline) {
+      console.error(log);
+      throw new Error(`wrangler dev did not start${ended ? `: ${ended}` : ''}`);
+    }
+    await sleep(300);
+  }
+}
+
+async function main() {
+  const base = process.env.RELAY || (await startRelay());
   const http = base.replace(/^ws/, 'http');
   let failed = 0;
   for (const { name, fn } of tests) {
@@ -377,15 +434,18 @@ async function main() {
       console.log(`FAIL - ${name}\n  ${err.stack}`);
     }
   }
-  if (child) {
-    try {
-      process.kill(-child.pid, 'SIGINT');
-    } catch {
-      child.kill('SIGINT');
-    }
-  }
   console.log(failed ? `${failed} failed` : `all ${tests.length} passed`);
-  process.exit(failed ? 1 : 0);
+  return failed;
 }
 
-main();
+main().then(
+  (failed) => {
+    stopRelay();
+    process.exit(failed ? 1 : 0);
+  },
+  (err) => {
+    stopRelay();
+    console.error(err);
+    process.exit(1);
+  },
+);
