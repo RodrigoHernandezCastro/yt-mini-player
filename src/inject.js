@@ -195,7 +195,8 @@
       // Do not change the cursor in the middle of a selection.
       setZone(e.altKey ? null : zoneAt(e.clientX, e.clientY));
     }
-    if (!pending) return;
+    // Only the real mouse turns a press into a drag (as in pointerdown).
+    if (!pending || !e.isTrusted) return;
     if (!(e.buttons & 1)) { pending = null; return; }
     const dx = e.clientX - pending.x, dy = e.clientY - pending.y;
     if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
