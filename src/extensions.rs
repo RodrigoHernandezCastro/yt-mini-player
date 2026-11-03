@@ -109,6 +109,17 @@ pub enum ExtensionEvent {
 
 /// Unpacks pending archives and lists the valid extensions.
 pub fn scan(dir: &Path) -> Scan {
+    scan_with(dir, true)
+}
+
+/// Like [`scan`], without reading the extensions' content: enough to show
+/// their names (and problems) again in another language. The fingerprints
+/// are left empty, so it is never used to approve anything.
+pub fn scan_names(dir: &Path) -> Scan {
+    scan_with(dir, false)
+}
+
+fn scan_with(dir: &Path, fingerprints: bool) -> Scan {
     let mut scan = Scan::default();
     let (old, new) = (dir.join(OLD_ARCHIVE_DIR), dir.join(ARCHIVE_DIR));
     if old.is_dir() && !new.exists() {
@@ -135,7 +146,7 @@ pub fn scan(dir: &Path) -> Scan {
             continue;
         };
         let manifest = read_manifest(&root);
-        let fingerprint = fingerprint(&base);
+        let fingerprint = if fingerprints { fingerprint(&base) } else { walk(&base).map(|_| String::new()) };
         match (manifest, fingerprint) {
             (Ok(m), Ok(fingerprint)) => scan.extensions.push(LocalExtension {
                 folder,
@@ -307,10 +318,13 @@ fn is_all_sites(pattern: &str) -> bool {
     matches!(pattern, "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*" | "*://*/" | "file:///*")
 }
 
-/// SHA-256 fingerprint of a folder: relative paths (sorted, with `/`),
-/// sizes and content of each file. It changes if any byte changes.
-pub fn fingerprint(dir: &Path) -> io::Result<String> {
+/// Every file under `dir`. Refuses symlinks, too many entries (folders
+/// count too: a tree of empty folders is not walked forever) and too much
+/// content, judged by the sizes before anything is read.
+fn walk(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
+    let mut entries = 0usize;
+    let mut total = 0u64;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         for entry in fs::read_dir(&current)? {
@@ -319,9 +333,17 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
             if kind.is_symlink() {
                 return Err(io::Error::other(FINGERPRINT_SYMLINK));
             }
+            entries += 1;
+            if entries > 2 * MAX_ENTRIES {
+                return Err(io::Error::other(FINGERPRINT_TOO_MANY));
+            }
             if kind.is_dir() {
                 stack.push(entry.path());
             } else {
+                total = total.saturating_add(entry.metadata()?.len());
+                if total > MAX_UNPACKED {
+                    return Err(io::Error::other(FINGERPRINT_TOO_BIG));
+                }
                 files.push(entry.path());
             }
         }
@@ -329,14 +351,25 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
             return Err(io::Error::other(FINGERPRINT_TOO_MANY));
         }
     }
+    Ok(files)
+}
+
+/// SHA-256 fingerprint of a folder: relative paths (sorted, with `/`),
+/// sizes and content of each file. It changes if any byte changes.
+pub fn fingerprint(dir: &Path) -> io::Result<String> {
+    use io::Read as _;
+    let mut files = walk(dir)?;
     let relative = |p: &Path| {
         p.strip_prefix(dir).unwrap_or(p).components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
     };
-    files.sort_by_key(|p| relative(p));
+    files.sort_by_cached_key(|p| relative(p));
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     for path in files {
-        let bytes = fs::read(&path)?;
+        // At most what is left of the budget (and one byte to notice): a
+        // file that grew after it was listed is not read in whole.
+        let mut bytes = Vec::new();
+        fs::File::open(&path)?.take(MAX_UNPACKED - total + 1).read_to_end(&mut bytes)?;
         total += bytes.len() as u64;
         if total > MAX_UNPACKED {
             return Err(io::Error::other(FINGERPRINT_TOO_BIG));
@@ -859,6 +892,37 @@ mod tests {
         fs::write(dir.join("ext/js/a.js"), "console.log(1)").unwrap();
         fs::rename(dir.join("ext/js/a.js"), dir.join("ext/a.js")).unwrap();
         assert_ne!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
+        // Names only (a language change): same list, nothing hashed.
+        let names = scan_names(&dir);
+        assert_eq!(names.extensions[0].name, "Reader");
+        assert!(names.extensions[0].fingerprint.is_empty() && names.problems.is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_bounded() {
+        // The exact bytes hashed are part of the approvals people already
+        // gave: this value must never change.
+        let dir = temp_dir("fp-stable");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("manifest.json"), "{}").unwrap();
+        fs::write(dir.join("sub/b.js"), "b").unwrap();
+        let mut hasher = Sha256::new();
+        for (path, content) in [("manifest.json", "{}"), ("sub/b.js", "b")] {
+            hasher.update(path.as_bytes());
+            hasher.update([0]);
+            hasher.update((content.len() as u64).to_le_bytes());
+            hasher.update(content.as_bytes());
+        }
+        let expected: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(fingerprint(&dir).unwrap(), expected);
+        // A file bigger than the whole budget is refused by its size, before
+        // it is read (a sparse file: nothing is really written).
+        let big = fs::File::create(dir.join("huge.bin")).unwrap();
+        big.set_len(MAX_UNPACKED + 1).unwrap();
+        drop(big);
+        let err = fingerprint(&dir).unwrap_err();
+        assert_eq!(fingerprint_error(&err), t!("ext.too_big"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
