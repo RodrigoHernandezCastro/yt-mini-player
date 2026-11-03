@@ -115,10 +115,32 @@ pub fn random_bytes<const N: usize>() -> io::Result<[u8; N]> {
 
 /// Atomic write: temporary file + rename, so no half-written file is left
 /// if the process dies in the middle of writing.
+///
+/// - The data is on the disk before the rename: without that, a power cut
+///   right after can leave the renamed file empty, and an empty
+///   `vault.key` loses everything the vault protects.
+/// - Every write has a temporary name of its own (`name.ext.<pid>-<n>.tmp`):
+///   two writers never share one, and `a.jpg` and `a.png` never meet.
+/// - If anything fails, the temporary file goes and the old file stays.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)
+    use std::{
+        io::Write,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let tmp = path.with_file_name(name);
+    let written = (|| -> io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })()
+    .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
@@ -636,6 +658,8 @@ pub mod tests {
         vault.write(&path, "settings", b"data").unwrap();
         assert_eq!(vault.read(&path, "settings").unwrap().unwrap().as_slice(), b"data");
         assert!(!dir.join("settings.tmp").exists());
+        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+        assert!(leftovers.is_empty(), "no temporary file is left: {leftovers:?}");
         fs::write(&path, vec![0u8; (MAX_FILE + 1) as usize]).unwrap();
         assert!(vault.read(&path, "settings").is_err());
         fs::remove_dir_all(&dir).unwrap();
