@@ -50,6 +50,20 @@ pub struct Question<'a> {
     pub no: &'a str,
 }
 
+/// The address the default browser may be given: an absolute `http(s)` URL
+/// with a host, no user name or password, at most 2048 characters, in its
+/// normalized form (what the shell gets is exactly what was checked).
+pub fn browser_url(url: &str) -> Option<String> {
+    if url.len() > 2048 {
+        return None;
+    }
+    let parsed = url::Url::parse(url.trim()).ok()?;
+    let web = matches!(parsed.scheme(), "http" | "https");
+    let host = parsed.host_str().is_some_and(|h| !h.is_empty());
+    let credentials = !parsed.username().is_empty() || parsed.password().is_some();
+    (web && host && !credentials).then(|| parsed.into())
+}
+
 /// Profile caches: they rebuild themselves. Deleted before decrypting so
 /// hundreds of MB need not be rewritten.
 const REBUILDABLE: &[&str] = &["Cache", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache", "DawnCache"];
@@ -205,13 +219,19 @@ mod win {
         }
     }
 
-    /// Opens a web address in the default browser.
+    /// Opens a web address in the default browser. Only plain http(s)
+    /// addresses: `ShellExecuteW` would also run a file path or a custom
+    /// protocol (`ms-msdt:`, `search-ms:`...), so anything else is refused.
     pub fn open_in_browser(url: &str) {
+        let Some(url) = super::browser_url(url) else {
+            crate::diag::note("refused to open a non-web address in the browser");
+            return;
+        };
         unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),
                 wide("open").as_ptr(),
-                wide(url).as_ptr(),
+                wide(&url).as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
                 SW_SHOWNORMAL,
@@ -308,7 +328,9 @@ pub fn remove_legacy_efs(_: &Path, _: &Path) -> LegacyEfs {
 pub fn on_session_lock(_: isize, _: impl Fn() + Send + Sync + 'static) {}
 
 #[cfg(not(windows))]
-pub fn open_in_browser(_: &str) {}
+pub fn open_in_browser(url: &str) {
+    let _ = browser_url(url);
+}
 
 #[cfg(not(windows))]
 pub fn ask(_: isize, question: &Question) -> bool {
@@ -318,3 +340,31 @@ pub fn ask(_: isize, question: &Question) -> bool {
 
 #[cfg(not(windows))]
 pub fn inform(_: isize, _: &str, _: &str, _: &str) {}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_url;
+
+    #[test]
+    fn only_web_addresses_reach_the_browser() {
+        assert_eq!(browser_url("https://example.com/x?y=1").as_deref(), Some("https://example.com/x?y=1"));
+        assert_eq!(browser_url("http://shop.example/offer").as_deref(), Some("http://shop.example/offer"));
+        assert_eq!(browser_url("HTTPS://Example.COM").as_deref(), Some("https://example.com/"), "normalized");
+        for bad in [
+            "",
+            "C:\\Windows\\System32\\calc.exe",
+            "\\\\server\\share\\x.exe",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-msdt:/id PCWDiagnostic",
+            "search-ms:query=x&crumb=location:\\\\evil\\share",
+            "javascript:alert(1)",
+            "mailto:a@b.c",
+            "https://user:pass@example.com/",
+            "https://",
+            "calc.exe",
+        ] {
+            assert_eq!(browser_url(bad), None, "{bad}");
+        }
+        assert_eq!(browser_url(&format!("https://example.com/{}", "a".repeat(3000))), None);
+    }
+}

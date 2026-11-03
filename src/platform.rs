@@ -107,15 +107,23 @@ mod win {
     }
 
     fn open(target: &OsStr) {
-        let (verb, target) = (wide("open"), wide(target));
+        shell(target, "open");
+    }
+
+    fn shell(target: &OsStr, verb: &str) {
+        let (verb, target) = (wide(verb), wide(target));
         unsafe {
             ShellExecuteW(null_mut(), verb.as_ptr(), target.as_ptr(), null(), null(), SW_SHOWNORMAL)
         };
     }
 
-    /// Opens a folder in File Explorer.
+    /// Opens a folder in File Explorer. Only a folder, and with the
+    /// `explore` verb: if something replaced it with a program or a
+    /// shortcut, "open" would run it.
     pub fn open_path(path: &Path) {
-        open(path.as_os_str());
+        if path.is_dir() {
+            shell(path.as_os_str(), "explore");
+        }
     }
 
     /// Text on the clipboard, if any.
