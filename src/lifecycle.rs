@@ -1,31 +1,31 @@
-//! Ciclo de vida del webview según el estado de la ventana (Fase 4).
+//! Webview lifecycle following the window state.
 //!
-//! Al minimizar:
-//! - `IsVisible = false` en el controlador: WebView2 deja de componer
-//!   fotogramas y la página pasa a `visibilityState = "hidden"`. El audio
-//!   sigue sonando, como en una pestaña en segundo plano.
-//! - `MemoryUsageTargetLevel = Low`: WebView2 recorta cachés y memoria de
-//!   trabajo. Requiere runtime 114.0.1823.32 o superior; en versiones
-//!   anteriores la llamada no hace nada.
+//! On minimize:
+//! - `IsVisible = false` on the controller: WebView2 stops composing frames
+//!   and the page goes to `visibilityState = "hidden"`. Audio keeps
+//!   playing, like in a background tab.
+//! - `MemoryUsageTargetLevel = Low`: WebView2 trims caches and working
+//!   memory. Needs runtime 114.0.1823.32 or later; on older versions the
+//!   call does nothing.
 //!
-//! Al restaurar se deshace en orden inverso: primero el nivel de memoria,
-//! después la visibilidad, para que el primer fotograma no se pinte con el
-//! perfil reducido.
+//! On restore it is undone in reverse order: first the memory level, then
+//! the visibility, so the first frame is not painted with the reduced
+//! profile.
 
 use wry::WebView;
 #[cfg(windows)]
 use wry::{MemoryUsageLevel, WebViewExtWindows};
 
-/// Estado aplicado actualmente, para no repetir llamadas COM en cada
-/// `Resized` (que llega muchas veces durante un redimensionado).
+/// The state applied now, so COM calls are not repeated on every `Resized`
+/// (which arrives many times during a resize).
 #[derive(Debug, Default)]
 pub struct Lifecycle {
     background: bool,
 }
 
 impl Lifecycle {
-    /// Llamar ante cada `WindowEvent::Resized`; solo actúa si el estado de
-    /// minimizado cambió.
+    /// Call on every `WindowEvent::Resized`; it only acts if the minimized
+    /// state changed.
     pub fn update(&mut self, webview: &WebView, minimized: bool) {
         if minimized == self.background {
             return;
@@ -50,7 +50,7 @@ fn set_memory_level(webview: &WebView, low: bool) {
         MemoryUsageLevel::Normal
     };
     if let Err(err) = webview.set_memory_usage_level(level) {
-        eprintln!("no se pudo cambiar el nivel de memoria: {err}");
+        eprintln!("could not change the memory level: {err}");
     }
 }
 

@@ -1,16 +1,16 @@
-# cargo-deny: qué dependencias se aceptan. Lo comprueba CI (ci.yml).
+# cargo-deny: which dependencies are accepted. CI checks it (ci.yml).
 
 [graph]
 targets = [{ triple = "x86_64-pc-windows-msvc" }]
 
 [advisories]
-# Cualquier aviso de seguridad de RustSec hace fallar la comprobación.
+# Any RustSec security advisory fails the check.
 version = 2
 yanked = "deny"
 ignore = [
-    # `paste` (lo usa lofty) es una macro que solo corre al compilar; está
-    # "sin mantenimiento" pero no tiene ninguna vulnerabilidad conocida.
-    { id = "RUSTSEC-2024-0436", reason = "macro de compilación sin código en el ejecutable; sin vulnerabilidades" },
+    # `paste` (used by lofty) is a macro that only runs at build time; it is
+    # "unmaintained" but has no known vulnerability.
+    { id = "RUSTSEC-2024-0436", reason = "build-time macro with no code in the executable; no vulnerabilities" },
 ]
 
 [licenses]
@@ -32,7 +32,7 @@ allow = [
 confidence-threshold = 0.9
 
 [licenses.private]
-# La propia app no se publica en crates.io (publish = false).
+# The app itself is not published on crates.io (publish = false).
 ignore = true
 
 [bans]
@@ -40,7 +40,7 @@ multiple-versions = "warn"
 wildcards = "deny"
 
 [sources]
-# Solo crates.io: nada de dependencias de repositorios git sueltos.
+# Only crates.io: no dependencies from loose git repositories.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

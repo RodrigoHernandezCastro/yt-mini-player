@@ -1,11 +1,11 @@
-# cargo audit: avisos que no afectan al ejecutable de Windows.
+# cargo audit: advisories that do not affect the Windows executable.
 [advisories]
 ignore = [
-    # proc-macro-error (sin mantenimiento) y glib (unsound): solo entran al
-    # compilar para Linux (gtk, a través de wry/tao). El .exe no los incluye.
+    # proc-macro-error (unmaintained) and glib (unsound): only pulled in when
+    # building for Linux (gtk, through wry/tao). The .exe does not include them.
     "RUSTSEC-2024-0370",
     "RUSTSEC-2024-0429",
-    # paste (sin mantenimiento): macro de compilación que usa lofty; no hay
-    # código suyo en el ejecutable ni vulnerabilidades conocidas.
+    # paste (unmaintained): a build-time macro lofty uses; none of its code is
+    # in the executable and it has no known vulnerabilities.
     "RUSTSEC-2024-0436",
 ]

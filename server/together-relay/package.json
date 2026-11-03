@@ -1,0 +1,15 @@
+{
+  "name": "ytmp-together-relay",
+  "private": true,
+  "type": "module",
+  "description": "Watch together relay for YT Mini Player (Cloudflare Workers + Durable Objects)",
+  "scripts": {
+    "dev": "wrangler dev --port 8799",
+    "deploy": "wrangler deploy",
+    "test": "node test/run.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0",
+    "ws": "^8.18.0"
+  }
+}

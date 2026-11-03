@@ -1,0 +1,110 @@
+﻿YT Mini Player: if a file went missing (antivirus)
+The installer shows the section in your Windows language.
+
+[en]
+A file of YT Mini Player is missing from this folder (install.ps1 or the
+program itself). Most likely your antivirus moved it to quarantine while
+the zip was being unpacked: new programs from small publishers are often
+held back until they build a reputation.
+
+What to do:
+  1. Make sure the download is the real one: the zip's SHA-256 must match
+     the one published on the release page. In PowerShell:
+       Get-FileHash .\YT-Mini-Player-*-win64.zip
+  2. Open Windows Security > Virus & threat protection > Protection
+     history, select the file and choose Actions > Restore. With another
+     antivirus, look for its quarantine.
+  3. Or unpack the zip again into a new folder and run Install.cmd.
+
+The installer checks every file against SHA256SUMS.txt before installing,
+so a changed file is never installed. If it keeps happening, report it to
+your antivirus as a false positive (Microsoft Defender:
+https://www.microsoft.com/wdsi/filesubmission, "Software developer" or
+"Home customer") and mention the version you downloaded.
+
+[es]
+Falta un archivo de YT Mini Player en esta carpeta (install.ps1 o el
+programa). Lo más probable es que tu antivirus lo haya puesto en
+cuarentena al descomprimir el zip: los programas nuevos de autores
+pequeños suelen quedar retenidos hasta que ganan reputación.
+
+Qué hacer:
+  1. Comprueba que la descarga es la auténtica: el SHA-256 del zip debe
+     coincidir con el publicado en la página de la versión. En PowerShell:
+       Get-FileHash .\YT-Mini-Player-*-win64.zip
+  2. Abre Seguridad de Windows > Protección antivirus y contra amenazas >
+     Historial de protección, elige el archivo y pulsa Acciones >
+     Restaurar. Con otro antivirus, busca su cuarentena.
+  3. O vuelve a descomprimir el zip en una carpeta nueva y ejecuta
+     Install.cmd.
+
+El instalador compara cada archivo con SHA256SUMS.txt antes de instalar,
+así que nunca instala un archivo alterado. Si vuelve a pasar, avísale a tu
+antivirus de que es un falso positivo (Microsoft Defender:
+https://www.microsoft.com/wdsi/filesubmission, como "Software developer" o
+"Home customer") e indica la versión que descargaste.
+
+[ru]
+В этой папке не хватает файла YT Mini Player (install.ps1 или самой
+программы). Скорее всего, антивирус поместил его в карантин при
+распаковке архива: новые программы небольших авторов часто блокируются,
+пока не наберут репутацию.
+
+Что делать:
+  1. Убедитесь, что загрузка подлинная: SHA-256 архива должен совпадать с
+     опубликованным на странице выпуска. В PowerShell:
+       Get-FileHash .\YT-Mini-Player-*-win64.zip
+  2. Откройте «Безопасность Windows» > «Защита от вирусов и угроз» >
+     «Журнал защиты», выберите файл и нажмите «Действия» >
+     «Восстановить». В другом антивирусе найдите его карантин.
+  3. Или распакуйте архив заново в новую папку и запустите Install.cmd.
+
+Установщик сверяет каждый файл с SHA256SUMS.txt, поэтому изменённый файл
+никогда не будет установлен. Если это повторяется, сообщите антивирусу о
+ложном срабатывании (Microsoft Defender:
+https://www.microsoft.com/wdsi/filesubmission, «Software developer» или
+«Home customer») и укажите загруженную версию.
+
+[pl]
+W tym folderze brakuje pliku YT Mini Player (install.ps1 albo samego
+programu). Najpewniej antywirus przeniósł go do kwarantanny podczas
+rozpakowywania archiwum: nowe programy od małych autorów często są
+wstrzymywane, dopóki nie zdobędą reputacji.
+
+Co zrobić:
+  1. Upewnij się, że pobrany plik jest oryginalny: SHA-256 archiwum musi
+     zgadzać się z podanym na stronie wydania. W PowerShell:
+       Get-FileHash .\YT-Mini-Player-*-win64.zip
+  2. Otwórz Zabezpieczenia Windows > Ochrona przed wirusami i zagrożeniami
+     > Historia ochrony, wybierz plik i kliknij Akcje > Przywróć. W innym
+     antywirusie poszukaj jego kwarantanny.
+  3. Albo rozpakuj archiwum ponownie do nowego folderu i uruchom
+     Install.cmd.
+
+Instalator porównuje każdy plik z SHA256SUMS.txt, więc zmieniony plik
+nigdy nie zostanie zainstalowany. Jeśli to się powtarza, zgłoś
+antywirusowi fałszywy alarm (Microsoft Defender:
+https://www.microsoft.com/wdsi/filesubmission, jako „Software developer”
+lub „Home customer”) i podaj pobraną wersję.
+
+[ja]
+このフォルダーに YT Mini Player のファイル（install.ps1 またはプログラム本体）が
+ありません。zip を展開したときに、ウイルス対策ソフトが検疫した可能性が高い
+です。小規模な発行元の新しいプログラムは、評判が蓄積されるまで止められる
+ことがよくあります。
+
+対処方法:
+  1. 本物のダウンロードか確認します。zip の SHA-256 がリリース ページに
+     公開されている値と一致する必要があります。PowerShell で:
+       Get-FileHash .\YT-Mini-Player-*-win64.zip
+  2. [Windows セキュリティ] > [ウイルスと脅威の防止] > [保護の履歴] を開き、
+     ファイルを選んで [操作] > [復元] を選びます。ほかのウイルス対策ソフトでは、
+     その検疫の一覧を確認してください。
+  3. または、zip を新しいフォルダーに展開し直して Install.cmd を実行します。
+
+インストーラーはインストール前にすべてのファイルを SHA256SUMS.txt と照合するため、
+改変されたファイルがインストールされることはありません。何度も起きる場合は、
+誤検知としてウイルス対策ソフトに報告し（Microsoft Defender:
+https://www.microsoft.com/wdsi/filesubmission、"Software developer" または
+"Home customer"）、ダウンロードしたバージョンを伝えてください。
+

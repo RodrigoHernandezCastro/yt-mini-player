@@ -1,12 +1,12 @@
-"""Prueba de extremo a extremo de inject.js + ui.js en Chromium (Playwright).
+"""End-to-end test of inject.js + ui.js in Chromium (Playwright).
 
-Sirve una página que imita la estructura del reproductor de YouTube en
-https://www.youtube.com/watch, con la política Trusted Types que usa YouTube,
-e inyecta los scripts igual que la aplicación. Un "host" simulado en Python
-responde a los mensajes IPC como lo hace app.rs.
+Serves a page that imitates the structure of YouTube's player at
+https://www.youtube.com/watch, with the Trusted Types policy YouTube uses,
+and injects the scripts just like the app. A simulated "host" in Python
+answers the IPC messages the way app.rs does, strings included.
 
-Uso:  python tests/ui_e2e.py [carpeta_para_capturas]
-Requiere: pip install playwright && playwright install chromium
+Usage:    python tests/ui_e2e.py [folder_for_screenshots]
+Requires: pip install playwright && playwright install chromium
 """
 
 import json
@@ -16,7 +16,7 @@ import sys
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from bundle import HOST_KEY, add_app_scripts  # noqa: E402
+from bundle import HOST_KEY, add_app_scripts, push_locale, text  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHOTS = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
@@ -25,9 +25,9 @@ EXT_ID = "cjpalhdlnbpafiamejdnhcphjbkeiagm"
 MOCK_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Video - YouTube</title>
 <style>
-  /* Estructura y "trampas" de apilamiento parecidas a las de YouTube:
-     cabecera fija, margen superior de 56 px, dos columnas, contenedores
-     con z-index propio y un transform que cambia el bloque contenedor. */
+  /* Structure and stacking "traps" like YouTube's: fixed header, 56 px
+     top margin, two columns, containers with their own z-index and a
+     transform that changes the containing block. */
   body { margin: 0; background: #0f0f0f; color: #fff; font-family: sans-serif; }
   #masthead-container { position: fixed; top: 0; left: 0; right: 0; z-index: 2020; height: 56px; background: #212121; display: flex; align-items: center; padding: 0 16px; }
   #masthead-container input { width: 50%; }
@@ -46,7 +46,7 @@ MOCK_HTML = """<!doctype html>
 </style></head>
 <body>
   <ytd-app>
-    <div id="masthead-container"><input id="search" placeholder="Buscar"></div>
+    <div id="masthead-container"><input id="search" placeholder="Search"></div>
     <ytd-page-manager>
       <ytd-watch-flexy>
         <div id="columns">
@@ -57,7 +57,7 @@ MOCK_HTML = """<!doctype html>
                 <div class="ytp-chrome-bottom"><button class="ytp-fullscreen-button">⛶</button></div>
               </div>
             </div>
-            <div id="below"><h1 id="title">Título del video</h1><p>Descripción y comentarios…</p></div>
+            <div id="below"><h1 id="title">Video title</h1><p>Description and comments…</p></div>
           </div>
           <div id="secondary"><div class="thumb"></div><div class="thumb"></div><div class="thumb"></div></div>
         </div>
@@ -65,7 +65,7 @@ MOCK_HTML = """<!doctype html>
     </ytd-page-manager>
   </ytd-app>
 <script>
-  // Simulación mínima del reproductor de YouTube.
+  // Minimal imitation of YouTube's player.
   window.playerClicks = 0;
   const player = document.getElementById('movie_player');
   let st = 1;
@@ -81,15 +81,6 @@ MOCK_HTML = """<!doctype html>
 </script>
 </body></html>"""
 
-IPC_STUB = """
-window.__sent = [];
-Object.defineProperty(window, 'ipc', { value: Object.freeze({ postMessage: (m) => {
-  window.__sent.push(m);
-  if (window.__onIpc) window.__onIpc(m);
-}})});
-"""
-
-
 def main():
     failures = []
     console_errors = []
@@ -100,19 +91,19 @@ def main():
             failures.append(name)
 
     host = {
-        "version": "0.2.0", "pinned": True, "videoOnly": False, "opacity": 100,
+        "version": "0.8.0", "pinned": True, "videoOnly": False, "opacity": 100,
         "ghost": False, "fullscreen": False, "autostart": False, "tray": True,
         "extensions": [
             {"folder": "sponsorblock", "name": "SponsorBlock", "version": "5.9", "id": EXT_ID,
              "enabled": True, "hasPage": True, "error": None, "pending": False},
-            {"folder": "roto", "name": "Extensión rota", "version": "1.0", "id": None,
-             "enabled": False, "hasPage": False, "error": "Manifest no válido (0x80070057)", "pending": False},
+            {"folder": "broken", "name": "Broken extension", "version": "1.0", "id": None,
+             "enabled": False, "hasPage": False, "error": "Invalid manifest (0x80070057)", "pending": False},
         ],
-        "extensionProblems": ["«vacia» no tiene manifest.json"],
+        "extensionProblems": ["“empty” has no manifest.json"],
         "extensionsError": None,
         "hotkeys": [
-            {"keys": "Ctrl+Alt+Y", "label": "Mostrar u ocultar el reproductor", "available": True},
-            {"keys": "Ctrl+Alt+G", "label": "Modo fantasma", "available": False},
+            {"keys": "Ctrl+Alt+Y", "label": "Show or hide the player", "available": True, "note": None},
+            {"keys": "Ctrl+Alt+G", "label": "Ghost mode", "available": False, "note": "another program uses it"},
         ],
     }
 
@@ -131,17 +122,57 @@ def main():
             )
 
         page.route("https://www.youtube.com/**", serve)
-        # Mismo envoltorio y orden que webview.rs.
+        # Same wrapper and order as webview.rs.
         add_app_scripts(page)
 
         def sent():
-            return page.evaluate("window.__sent.slice()")
+            """What the page sent, apart from the menu's open/closed reports
+            (checked on their own below)."""
+            return [m for m in page.evaluate("window.__sent.slice()")
+                    if not m.startswith("menu-open:") and not m.startswith("page-check:")]
+
+        def page_checks():
+            return [json.loads(m.split(":", 1)[1]) for m in page.evaluate("window.__sent.slice()")
+                    if m.startswith("page-check:")]
+
+        def menu_reports():
+            return [m for m in page.evaluate("window.__sent.slice()") if m.startswith("menu-open:")]
 
         def clear():
             page.evaluate("window.__sent.length = 0")
 
         def sync():
             page.evaluate(f"window.__ytmpSync({json.dumps(HOST_KEY)}, {json.dumps(host)})")
+
+        cdp = page.context.new_cdp_session(page)
+
+        def button_names():
+            """Accessible names of the buttons (the bar lives in a closed shadow root)."""
+            tree = cdp.send("Accessibility.getFullAXTree")
+            return [n.get("name", {}).get("value") for n in tree["nodes"] if n.get("role", {}).get("value") == "button"]
+
+        def all_names():
+            tree = cdp.send("Accessibility.getFullAXTree")
+            return [n.get("name", {}).get("value") or "" for n in tree["nodes"]]
+
+        def click_named(predicate):
+            """Clicks the element whose accessible name matches, wherever the
+            closed shadow root put it. False if there is none."""
+            tree = cdp.send("Accessibility.getFullAXTree")
+            for node in tree["nodes"]:
+                name = node.get("name", {}).get("value") or ""
+                if predicate(name) and node.get("backendDOMNodeId"):
+                    cdp.send("DOM.scrollIntoViewIfNeeded", {"backendNodeId": node["backendDOMNodeId"]})
+                    quad = cdp.send("DOM.getBoxModel", {"backendNodeId": node["backendDOMNodeId"]})["model"]["border"]
+                    page.mouse.click((quad[0] + quad[2]) / 2, (quad[1] + quad[5]) / 2)
+                    return True
+            return False
+
+        def press_layout_key(key, code, vk, ctrl=True):
+            """A real key press as a given keyboard layout produces it (CDP)."""
+            for kind in ("rawKeyDown", "keyUp"):
+                cdp.send("Input.dispatchKeyEvent", {"type": kind, "modifiers": 2 if ctrl else 0, "key": key, "code": code,
+                                                    "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk})
 
         def shot(name):
             if SHOTS:
@@ -151,12 +182,23 @@ def main():
         page.goto("https://www.youtube.com/watch?v=test")
         page.wait_for_timeout(300)
 
-        print("Arranque")
-        check("ready" in sent(), "la página envía 'ready'")
+        print("Startup")
+        check("ready" in sent(), "the page sends 'ready'")
+        page.wait_for_timeout(250)
+        size = page.evaluate("innerWidth + 'x' + innerHeight")
+        check(f"viewport:{size}" in sent(), f"…and its size in CSS px, for a guest's clicks ({size})")
+        page.set_viewport_size({"width": 700, "height": 420})
+        page.wait_for_timeout(300)
+        check("viewport:700x420" in sent(), "…again after a resize")
+        page.set_viewport_size({"width": 640, "height": 360})
+        page.wait_for_timeout(300)
+        push_locale(page, "en")
         sync()
-        check(page.evaluate("!!document.querySelector('ytmp-ui')"), "la interfaz se monta en el documento")
+        check(page.evaluate("!!document.querySelector('ytmp-ui')"), "the interface is mounted in the document")
+        names = button_names()
+        check("Always on top (Ctrl+T)" in names and "Main menu (Alt+Home)" in names, f"bar tooltips in English ({names[:4]})")
 
-        print("Barra lateral")
+        print("Side bar")
         page.mouse.move(320, 180)
         page.wait_for_timeout(1700)
         bar_hidden = page.evaluate("""() => {
@@ -165,16 +207,16 @@ def main():
         }""")
         page.mouse.move(630, 180)
         page.wait_for_timeout(300)
-        shot("1-barra")
+        shot("1-bar")
         visible_at = page.evaluate("document.elementFromPoint(620, 180)?.tagName")
-        check(visible_at == "YTMP-UI", "la barra aparece al acercarse al borde derecho")
+        check(visible_at == "YTMP-UI", "the bar shows up near the right edge")
 
         clear()
         clicks_before = page.evaluate("window.playerClicks")
         page.mouse.move(611, 180)
-        # Botones por su posición en la barra (centrada verticalmente).
+        # Buttons by their position on the bar (vertically centred).
         boxes = page.evaluate("""() => {
-          // El shadow es cerrado: localizamos los botones por coordenadas.
+          // The shadow root is closed: the buttons are found by coordinates.
           const out = [];
           for (let y = 0; y < innerHeight; y += 2) {
             const el = document.elementFromPoint(611, y);
@@ -183,14 +225,14 @@ def main():
           return [out[0], out[out.length - 1]];
         }""")
         top, bottom = boxes
-        check(top is not None and bottom - top > 200, f"barra con altura razonable ({top}-{bottom})")
+        check(top is not None and bottom - top > 200, f"bar of a sensible height ({top}-{bottom})")
 
-        # Orden: asa, atrás, | solo video, pantalla completa, fijar, ocultar, | más, cerrar
-        # Cada botón 32 px + 2 px de separación; separadores de 7 px.
+        # Order: handle, home, back, | video only, full screen, pin, hide, | settings, more, close
+        # Each button 32 px + 2 px gap; separators of 7 px.
         y0 = top + 5 + 16
         ys = {}
         y = y0
-        for key in ["grip", "home", "back", "sep", "videoOnly", "fullscreen", "pinned", "hide", "sep", "more", "quit"]:
+        for key in ["grip", "home", "back", "sep", "videoOnly", "fullscreen", "pinned", "hide", "sep", "settings", "more", "quit"]:
             if key == "sep":
                 y += 7 + 2
                 continue
@@ -198,37 +240,70 @@ def main():
             y += 34
 
         page.mouse.click(611, ys["pinned"])
-        check(sent() == ["pin"], f"botón fijar envía 'pin' ({sent()})")
-        check(page.evaluate("window.playerClicks") == clicks_before, "los clics en la barra no llegan al reproductor")
+        check(sent() == ["pin"], f"the pin button sends 'pin' ({sent()})")
+        check(page.evaluate("window.playerClicks") == clicks_before, "clicks on the bar do not reach the player")
 
         clear()
         page.mouse.move(611, ys["grip"])
         page.mouse.down()
         page.mouse.up()
-        check("drag" in sent(), "el asa envía 'drag'")
+        check("drag" in sent(), "the handle sends 'drag'")
 
-        print("Menú Más")
+        clear()
+        page.mouse.click(611, ys["settings"])
+        check(sent() == ["settings"], f"the gear opens Settings ({sent()})")
+        clear()
+        page.keyboard.press("Control+Comma")
+        check(sent() == ["settings"], f"so does Ctrl+, ({sent()})")
+
+        print("More menu")
+        clear()
         page.mouse.move(611, ys["more"])
         page.mouse.click(611, ys["more"])
         page.wait_for_timeout(200)
+        check(menu_reports() == ["menu-open:1"], f"the app is told the menu is open (guests cannot click it) ({menu_reports()})")
         shot("2-menu")
-        menu_text = page.evaluate("""() => {
-          // Leemos el texto del panel a través de la accesibilidad del árbol plano.
-          return document.querySelector('ytmp-ui') ? true : false;
-        }""")
-        check(menu_text, "menú abierto")
-        # El primer elemento del menú es "Siempre visible": a 8 px del borde superior.
+        names = all_names()
+        check(any(n.startswith(text("en", "ui.settings_all")) for n in names), "with a Settings row")
+        check(any(n.startswith("Always on top") for n in names) and not any(n.startswith("Start with Windows") for n in names),
+              "menu open, with the everyday rows (the rest is in Settings)")
+        check(any(n.startswith("Language") for n in names), "with a Language row")
+        problems = len(host["extensionProblems"]) + sum(1 for e in host["extensions"] if e["error"])
+        check(any(n.startswith(text("en", "ui.section.extensions")) and text("en", "ui.ext.problems", count=problems) in n for n in names)
+              and not any("SponsorBlock" in n for n in names), "extensions summed up in one row (with the ones that need attention)")
         clear()
-        page.mouse.click(400, 8 + 6 + 22 + 16)  # sección Ventana, primera fila
-        check(sent() == ["pin"], f"fila 'Siempre visible' envía 'pin' ({sent()})")
+        check(click_named(lambda n: n.startswith(text("en", "ui.section.extensions"))), "the Extensions row")
+        check(sent() == ["settings:extensions", "menu-open:0"] or sent() == ["settings:extensions"],
+              f"opens Settings at Extensions ({sent()})")
+        page.mouse.click(611, ys["more"])
+        page.wait_for_timeout(150)
+        # The menu's first item is "Always on top": 8 px from the top edge.
+        clear()
+        page.mouse.click(400, 8 + 6 + 22 + 16)  # Window section, first row
+        check(sent() == ["pin"], f"the 'Always on top' row sends 'pin' ({sent()})")
+
+        clear()
+        check(click_named(lambda n: n == text("en", "ui.together")), "with a Watch together row")
+        check(sent() == ["together"], f"which opens its window ({sent()})")
+        check(menu_reports() == ["menu-open:0"], f"…and the menu closed is reported once ({menu_reports()})")
+        # During a session, the row says so.
+        page.mouse.click(611, ys["more"])
+        page.wait_for_timeout(150)
+        host["together"] = "guest"
+        sync()
+        page.wait_for_timeout(100)
+        check(any(n.startswith(text("en", "ui.together")) and text("en", "ui.together_watching") in n for n in all_names()),
+              "in a session, the row says so")
+        host["together"] = None
+        sync()
 
         clear()
         page.keyboard.press("Escape")
         page.wait_for_timeout(100)
         page.mouse.click(320, 300)
-        check(page.evaluate("window.playerClicks") >= clicks_before, "tras cerrar el menú, la página vuelve a recibir clics")
+        check(page.evaluate("window.playerClicks") >= clicks_before, "after closing the menu, the page gets clicks again")
 
-        print("Arrastrar el video")
+        print("Dragging the video")
         page.mouse.move(10, 10)
         page.wait_for_timeout(1500)
         clear()
@@ -238,37 +313,37 @@ def main():
         page.mouse.move(215, 160, steps=4)
         page.mouse.up()
         page.wait_for_timeout(50)
-        check(sent() == ["drag"], f"arrastrar el video envía 'drag' ({sent()})")
-        check(page.evaluate("window.playerClicks") == before, "el arrastre no pausa el video")
+        check(sent() == ["drag"], f"dragging the video sends 'drag' ({sent()})")
+        check(page.evaluate("window.playerClicks") == before, "dragging does not pause the video")
 
         clear()
         before = page.evaluate("window.playerClicks")
         page.mouse.click(200, 150)
-        check(sent() == [], f"un clic sin mover no arrastra ({sent()})")
-        check(page.evaluate("window.playerClicks") == before + 1, "un clic sin mover llega al reproductor")
+        check(sent() == [], f"a click without moving does not drag ({sent()})")
+        check(page.evaluate("window.playerClicks") == before + 1, "a click without moving reaches the player")
 
         clear()
-        page.mouse.move(200, 30)  # barra de búsqueda: no es video
+        page.mouse.move(200, 30)  # search bar: not video
         page.mouse.down()
         page.mouse.move(240, 40, steps=4)
         page.mouse.up()
-        check(sent() == [], "arrastrar fuera del video no mueve la ventana")
+        check(sent() == [], "dragging outside the video does not move the window")
 
         clear()
         before = page.evaluate("window.playerClicks")
         page.keyboard.down("Alt")
         page.mouse.click(200, 150)
         page.keyboard.up("Alt")
-        check(sent() == ["drag"], "Alt+clic envía 'drag'")
-        check(page.evaluate("window.playerClicks") == before, "Alt+clic no pausa")
+        check(sent() == ["drag"], "Alt+click sends 'drag'")
+        check(page.evaluate("window.playerClicks") == before, "Alt+click does not pause")
 
         clear()
         page.mouse.move(639, 200)
         page.mouse.down()
         page.mouse.up()
-        check(sent() == ["resize:e"], f"borde derecho envía 'resize:e' ({sent()})")
+        check(sent() == ["resize:e"], f"the right edge sends 'resize:e' ({sent()})")
 
-        print("Atajos")
+        print("Shortcuts")
         page.mouse.move(320, 180)
         for keys, expected in [
             ("Control+t", "pin"), ("Control+m", "video-only"), ("Control+h", "hide"),
@@ -279,98 +354,214 @@ def main():
             page.keyboard.press(keys)
             check(sent() == [expected], f"{keys} → {expected} ({sent()})")
 
+        # Other keyboard layouts: Ctrl+T on a Russian keyboard is typed on the
+        # "Е" key (same position); on Dvorak, T is somewhere else.
+        clear()
+        press_layout_key("е", "KeyT", 84)
+        check(sent() == ["pin"], f"Russian layout: Ctrl+Е (the T key) → pin ({sent()})")
+        clear()
+        press_layout_key("т", "KeyN", 78)
+        check(sent() == [], f"Russian layout: Ctrl+Т (the N key) does nothing ({sent()})")
+        clear()
+        press_layout_key("t", "KeyK", 84)
+        check(sent() == ["pin"], f"Dvorak: the key labelled T → pin ({sent()})")
+        clear()
+        press_layout_key("k", "KeyT", 75)
+        check(sent() == [], f"Dvorak: the key in T's position types K → nothing ({sent()})")
+
         clear()
         page.keyboard.press("F1")
         page.wait_for_timeout(150)
-        shot("3-ayuda")
+        shot("3-help")
         covers = page.evaluate("document.elementFromPoint(20, 20)?.tagName")
-        check(covers == "YTMP-UI", "F1 abre la ayuda")
+        check(covers == "YTMP-UI", "F1 opens the help")
+        names = all_names()
+        check("Keyboard shortcuts" in names and "Ghost mode (another program uses it)" in names,
+              "the help lists the global shortcuts and why one is unavailable")
+        check("Alt+Home" in names, "with the Home key's name")
         page.keyboard.press("Escape")
         page.wait_for_timeout(100)
-        check(page.evaluate("document.elementFromPoint(20, 20)?.tagName") != "YTMP-UI", "Esc cierra la ayuda")
+        check(page.evaluate("document.elementFromPoint(20, 20)?.tagName") != "YTMP-UI", "Esc closes the help")
 
-        # Los atajos no se disparan escribiendo una letra suelta en la búsqueda.
+        # Shortcuts do not fire while typing a single letter in the search box.
         clear()
         page.click("#search")
-        page.keyboard.type("hola tm")
-        check(sent() == [], "escribir en la búsqueda no dispara atajos")
-        check(page.input_value("#search") == "hola tm", "el texto llega al buscador")
+        page.keyboard.type("hello tm")
+        check(sent() == [], "typing in the search box does not trigger shortcuts")
+        check(page.input_value("#search") == "hello tm", "the text reaches the search box")
 
-        print("Solo video")
+        print("Language")
+        page.mouse.move(320, 180)
+        push_locale(page, "es")
+        page.wait_for_timeout(100)
+        names = button_names()
+        check("Menú principal (Alt+Inicio)" in names, f"Spanish: the Home key is called Inicio, as printed on the keyboard ({names[1]})")
+        push_locale(page, "ja")
+        page.wait_for_timeout(100)
+        names = button_names()
+        check("常に手前に表示 (Ctrl+T)" in names, f"Japanese tooltips ({names[:3]})")
+        page.mouse.move(630, 180)
+        page.wait_for_timeout(300)
+        page.mouse.click(611, ys["more"])
+        page.wait_for_timeout(200)
+        names = all_names()
+        check("ウィンドウ" in names and "アプリ" in names, "the menu follows the new language")
+        check("言語 / Language" in names, "the language row says 'Language' in English too")
+        shot("6-menu-ja")
+        # Open the language list and pick Polish.
+        check(click_named(lambda n: n.startswith("言語 / Language")), "the language row can be clicked")
+        page.wait_for_timeout(100)
+        names = all_names()
+        check(all(any(n.startswith(l) for n in names) for l in ("English", "Español", "Русский", "Polski", "日本語")),
+              "it opens a list with each language's own name")
+        check(any("ポーランド語" in n for n in names), "and the name in the current language (ポーランド語)")
+        shot("7-menu-languages")
+        clear()
+        click_named(lambda n: n.startswith("Polski"))
+        check(sent() == ["lang:pl"], f"choosing Polish sends lang:pl ({sent()})")
+        page.keyboard.press("Escape")
+        push_locale(page, "ru")
+        page.wait_for_timeout(100)
+        page.keyboard.press("F1")
+        page.wait_for_timeout(100)
+        names = all_names()
+        check("Сочетания клавиш" in names and "Перемещает окно из любой точки" in names, "the help in Russian")
+        shot("8-help-ru")
+        page.keyboard.press("Escape")
+        push_locale(page, "en")
+        page.wait_for_timeout(100)
+
+        print("Video only")
         host["videoOnly"] = True
         sync()
         page.wait_for_timeout(250)
         rect = page.evaluate("(() => { const r = document.getElementById('movie_player').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()")
-        check(rect == [0, 0, 640, 360], f"el reproductor ocupa toda la ventana ({rect})")
+        check(rect == [0, 0, 640, 360], f"the player fills the whole window ({rect})")
         in_player = """([x, y]) => { const el = document.elementFromPoint(x, y);
           return !!el && !!el.closest('#movie_player'); }"""
-        for name, point in [("cabecera", (300, 20)), ("título", (60, 330)), ("recomendaciones", (560, 120)),
-                            ("esquina", (5, 355))]:
-            check(page.evaluate(in_player, list(point)), f"solo video: en la zona de {name} se ve el reproductor")
+        for name, point in [("header", (300, 20)), ("title", (60, 330)), ("recommendations", (560, 120)),
+                            ("corner", (5, 355))]:
+            check(page.evaluate(in_player, list(point)), f"video only: the player shows in the {name} area")
         page.mouse.move(630, 180)
         page.wait_for_timeout(300)
-        shot("4-solo-video")
+        shot("4-video-only")
         check(page.evaluate("document.elementFromPoint(611, 180)?.tagName") == "YTMP-UI",
-              "solo video: la barra sigue encima del reproductor")
+              "video only: the bar stays above the player")
         clear()
         before = page.evaluate("window.playerClicks")
         page.mouse.click(540, 120)
-        check(page.evaluate("window.playerClicks") == before + 1, "solo video: un clic donde estaban las recomendaciones llega al reproductor")
+        check(page.evaluate("window.playerClicks") == before + 1, "video only: a click where the recommendations were reaches the player")
 
-        print("Solo video + pantalla completa")
+        print("Video only + full screen")
         page.evaluate("document.getElementById('movie_player').requestFullscreen()")
         page.wait_for_timeout(300)
         check(not page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"),
-              "en pantalla completa se desactiva el CSS de solo video")
+              "in full screen the video-only CSS is turned off")
         page.evaluate("document.exitFullscreen()")
         page.wait_for_timeout(300)
         check(page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"),
-              "al salir de pantalla completa vuelve el modo solo video")
-        check(page.evaluate(in_player, [60, 330]), "y el contenido sigue oculto")
+              "leaving full screen brings video only back")
+        check(page.evaluate(in_player, [60, 330]), "and the content stays hidden")
 
         host["videoOnly"] = False
         sync()
         page.wait_for_timeout(100)
-        check(not page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"), "se desactiva al sincronizar")
+        check(not page.evaluate("document.documentElement.classList.contains('ytmp-video-only')"), "turned off when synced")
         check(page.evaluate("!!document.elementFromPoint(300, 20)?.closest('#masthead-container')")
               and page.evaluate("!!document.elementFromPoint(560, 120)?.closest('#secondary')"),
-              "sin solo video, la página vuelve a la normalidad")
+              "without video only, the page is back to normal")
 
-        print("Pantalla completa")
+        print("Full screen")
         clear()
         page.mouse.move(630, 180)
         page.wait_for_timeout(300)
         page.mouse.click(611, ys["fullscreen"])
         page.wait_for_timeout(400)
         fs = page.evaluate("document.fullscreenElement?.id")
-        check(fs == "movie_player", f"el botón pone el reproductor a pantalla completa ({fs})")
-        check("fullscreen:1" in sent(), f"avisa al host ({sent()})")
+        check(fs == "movie_player", f"the button puts the player in full screen ({fs})")
+        check("fullscreen:1" in sent(), f"tells the host ({sent()})")
         check(page.evaluate("document.querySelector('ytmp-ui').parentElement.id") == "movie_player",
-              "la interfaz se mueve dentro del elemento a pantalla completa")
+              "the interface moves inside the full-screen element")
         clear()
         page.keyboard.press("F11")
         page.wait_for_timeout(400)
-        check(page.evaluate("document.fullscreenElement") is None, "F11 sale de pantalla completa")
-        check("fullscreen:0" in sent(), "avisa al host de la salida")
+        check(page.evaluate("document.fullscreenElement") is None, "F11 leaves full screen")
+        check("fullscreen:0" in sent(), "tells the host it left")
 
-        print("Avisos y multimedia")
-        page.evaluate(f"window.__ytmpToast({json.dumps(HOST_KEY)}, 'Siempre visible: activado')")
+        print("Notices and media")
+        page.evaluate(f"window.__ytmpToast({json.dumps(HOST_KEY)}, 'Always on top: on')")
         page.wait_for_timeout(250)
-        shot("5-aviso")
+        shot("5-notice")
         page.evaluate("window.__ytmpMedia('toggle')")
-        check(page.evaluate("window.lastMedia") == "pause", "Ctrl+Alt+P pausa mediante la API del reproductor")
+        check(page.evaluate("window.lastMedia") == "pause", "Ctrl+Alt+P pauses through the player API")
         page.evaluate("window.__ytmpMedia('next')")
-        check(page.evaluate("window.lastMedia") == "next", "Ctrl+Alt+N pasa al siguiente")
+        check(page.evaluate("window.lastMedia") == "next", "Ctrl+Alt+N goes to the next one")
 
-        print("Robustez")
-        check(not console_errors, f"sin errores de consola ni Trusted Types ({console_errors[:3]})")
+        print("Self-check (the page still has what the app relies on)")
+        page.evaluate("document.exitFullscreen().catch(() => {})")
+        page.wait_for_timeout(200)
+        # YouTube renames its player (and its styles with it): found anyway,
+        # and reported.
+        page.evaluate("""(() => { const p = document.getElementById('movie_player');
+          p.style.cssText = 'position: relative; width: 100%; aspect-ratio: 16/9; background: #000; overflow: hidden';
+          p.querySelector('video').style.cssText = 'position: absolute; left: 0; top: 0; width: 100%; height: 100%';
+          p.id = 'renamed_player'; p.className = 'new-player'; })()""")
+        clear()
+        page.evaluate("document.querySelector('video').dispatchEvent(new Event('playing'))")
+        page.wait_for_timeout(700)
+        renamed = page_checks()
+        check(len(renamed) == 1 and renamed[0]["player"] == "video" and not renamed[0]["api"]
+              and not renamed[0]["fullscreenButton"], f"a renamed player is reported, with what is missing ({renamed})")
+        host["videoOnly"] = True
+        sync()
+        page.wait_for_timeout(250)
+        rect = page.evaluate("(() => { const r = document.querySelector('[data-ytmp-player]').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()")
+        check(rect == [0, 0, 640, 360], f"video only still fills the window with the video's box ({rect})")
+        check(page.evaluate("document.querySelectorAll('[data-ytmp-player]').length") == 1, "only one element is marked")
+        host["videoOnly"] = False
+        sync()
+        page.wait_for_timeout(150)
+        page.mouse.move(10, 10)
+        page.wait_for_timeout(1500)
+        clear()
+        page.mouse.move(200, 150)
+        page.mouse.down()
+        page.mouse.move(215, 160, steps=4)
+        page.mouse.up()
+        page.wait_for_timeout(50)
+        check(sent() == ["drag"], f"the renamed player's video still drags the window ({sent()})")
+        page.mouse.move(630, 180)
+        page.wait_for_timeout(300)
+        page.mouse.click(611, ys["fullscreen"])
+        page.wait_for_timeout(400)
+        check(page.evaluate("!!document.fullscreenElement"), "full screen still works without YouTube's button")
+        page.evaluate("document.exitFullscreen().catch(() => {})")
+        page.wait_for_timeout(300)
+        page.evaluate("""(() => { const p = document.getElementById('renamed_player');
+          p.id = 'movie_player'; p.className = 'html5-video-player';
+          p.style.cssText = ''; p.querySelector('video').style.cssText = ''; })()""")
+        clear()
+        page.evaluate("document.querySelector('video').dispatchEvent(new Event('playing'))")
+        page.wait_for_timeout(700)
+        healthy = {"site": "youtube", "page": "watch", "player": "main", "api": True, "video": True, "fullscreenButton": True}
+        check(page_checks() == [healthy], f"when a video plays, it reports everything found ({page_checks()})")
+        clear()
+        page.evaluate("document.querySelector('video').dispatchEvent(new Event('playing'))")
+        page.wait_for_timeout(700)
+        check(page_checks() == [], "the same result is not sent twice")
+
+        print("Robustness")
+        check(page.evaluate("typeof window.__ytmpLocale") == "function" and
+              page.evaluate("window.__ytmpLocale('wrong-key', {lang: 'ja', ui: {}}) === undefined"), "a wrong key cannot change the strings")
+        check("Always on top (Ctrl+T)" in button_names(), "the strings stay as they were")
+        check(not console_errors, f"no console or Trusted Types errors ({console_errors[:3]})")
         browser.close()
 
     print()
     if failures:
-        print(f"{len(failures)} prueba(s) fallaron")
+        print(f"{len(failures)} test(s) failed")
         sys.exit(1)
-    print("ui.js + inject.js: todas las pruebas pasan")
+    print("ui.js + inject.js: all tests pass")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-//! Lo que la música necesita de Windows: elegir carpeta, papelera,
-//! "Mostrar en la carpeta" y espacio libre.
+//! What My music needs from Windows: picking a folder, the Recycle Bin,
+//! "Show in folder" and free space.
 
 use std::path::{Path, PathBuf};
 
@@ -24,19 +24,19 @@ mod win {
         path.as_os_str().encode_wide().chain([0]).collect()
     }
 
-    /// Hilos que usan el shell: COM de un solo hilo (lo que espera).
+    /// Threads that use the shell: single-threaded COM (what it expects).
     pub fn init_thread() {
         unsafe {
             CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
         }
     }
 
-    /// Envía archivos a la Papelera (se pueden recuperar).
+    /// Sends files to the Recycle Bin (they can be restored).
     pub fn to_recycle_bin(paths: &[PathBuf]) -> bool {
         if paths.is_empty() {
             return true;
         }
-        // Lista terminada en doble NUL.
+        // A double-NUL terminated list.
         let mut from: Vec<u16> = Vec::new();
         for p in paths {
             from.extend(p.as_os_str().encode_wide());
@@ -56,7 +56,7 @@ mod win {
         unsafe { SHFileOperationW(&mut op) == 0 && op.fAnyOperationsAborted == 0 }
     }
 
-    /// Abre el Explorador con el archivo seleccionado.
+    /// Opens File Explorer with the file selected.
     pub fn reveal(path: &Path) {
         let w = wide(path);
         unsafe {
@@ -83,7 +83,7 @@ mod win {
         (ok != 0).then_some(free)
     }
 
-    /// Diálogo "Elegir carpeta" del sistema (modal sobre `owner`).
+    /// The system "Select folder" dialog (modal over `owner`).
     pub fn pick_folder(owner: isize, title: &str) -> Option<PathBuf> {
         use windows::{
             core::HSTRING,
@@ -114,7 +114,7 @@ pub use win::{free_space, init_thread, pick_folder, reveal, to_recycle_bin};
 #[cfg(not(windows))]
 pub fn init_thread() {}
 
-/// Fuera de Windows (pruebas): borra de verdad.
+/// Outside Windows (tests): really deletes.
 #[cfg(not(windows))]
 pub fn to_recycle_bin(paths: &[PathBuf]) -> bool {
     paths.iter().all(|p| std::fs::remove_file(p).is_ok())
@@ -133,7 +133,7 @@ pub fn pick_folder(_: isize, _: &str) -> Option<PathBuf> {
     None
 }
 
-/// Carpeta de música del usuario (`Música`), donde van las descargas.
+/// The user's Music folder, where downloads go.
 pub fn music_dir() -> Option<PathBuf> {
     directories::UserDirs::new().and_then(|u| u.audio_dir().map(Path::to_path_buf))
 }

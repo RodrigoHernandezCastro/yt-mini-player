@@ -1,5 +1,4 @@
-//! Leer archivos de audio: etiquetas, duración, portada y huella del
-//! contenido.
+//! Reading audio files: tags, duration, cover and content hash.
 
 use std::{
     fs::{self, File},
@@ -15,9 +14,9 @@ use walkdir::WalkDir;
 
 use super::library::{Source, Track};
 
-/// Formatos que el motor (WebView2) reproduce.
+/// Formats the engine (WebView2) plays.
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav"];
-/// Más allá de esto no es una canción (y no se lee entera para el hash).
+/// Beyond this it is not a song (and it is not read whole for the hash).
 const MAX_AUDIO: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_COVER: usize = 8 * 1024 * 1024;
 const MAX_DEPTH: usize = 16;
@@ -27,7 +26,7 @@ pub fn extension(path: &Path) -> Option<String> {
     AUDIO_EXTENSIONS.contains(&ext.as_str()).then_some(ext)
 }
 
-/// Id estable de una ruta (no depende de mayúsculas, como Windows).
+/// A path's stable id (case-insensitive, like Windows).
 pub fn track_id(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('/', "\\").to_lowercase();
     let digest = Sha1::digest(normalized.as_bytes());
@@ -38,8 +37,8 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Archivos de audio bajo `root` (sin seguir enlaces ni entrar en carpetas
-/// ocultas como `$RECYCLE.BIN`).
+/// Audio files under `root` (without following links or entering hidden
+/// folders like `$RECYCLE.BIN`).
 pub fn audio_files(root: &Path, cancel: &AtomicBool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let walker = WalkDir::new(root).follow_links(false).max_depth(MAX_DEPTH).into_iter().filter_entry(|e| {
@@ -56,13 +55,13 @@ pub fn audio_files(root: &Path, cancel: &AtomicBool) -> Vec<PathBuf> {
     out
 }
 
-/// Trozos que se leen para la huella rápida del contenido.
+/// Chunks read for the quick content hash.
 const HASH_CHUNK: usize = 64 * 1024;
 
-/// Huella del contenido: SHA-1 del tamaño y de tres trozos (principio,
-/// medio y final). Leer canciones enteras para importar miles de ellas
-/// sería lentísimo; dos archivos de audio distintos no coinciden en el
-/// tamaño exacto *y* en esos 192 KB. Los archivos pequeños se leen enteros.
+/// Content hash: SHA-1 of the size and three chunks (start, middle and
+/// end). Reading whole songs to import thousands of them would be very
+/// slow; two different audio files do not match in the exact size *and*
+/// in those 192 KB. Small files are read whole.
 pub fn content_hash(path: &Path) -> io::Result<String> {
     use std::io::{Seek, SeekFrom};
     let mut file = File::open(path)?;
@@ -88,7 +87,7 @@ pub fn content_hash(path: &Path) -> io::Result<String> {
     Ok(hex(&hasher.finalize()[..12]))
 }
 
-/// SHA-1 completo (para verificar descargas contra el Archive).
+/// Full SHA-1 (to verify downloads against the Archive).
 pub fn sha1_file(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha1::new();
@@ -103,14 +102,14 @@ pub fn sha1_file(path: &Path) -> io::Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
-/// Tamaño y fecha de modificación (para saber si hay que volver a leerlo).
+/// Size and modification date (to know whether it must be read again).
 pub fn stamp(path: &Path) -> io::Result<(u64, u64)> {
     let meta = fs::metadata(path)?;
     let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     Ok((meta.len(), modified))
 }
 
-/// Título a partir del nombre del archivo: "03 - Mi tema.mp3" → "Mi tema".
+/// Title from the file name: "03 - My song.mp3" → "My song".
 pub fn title_from_file_name(path: &Path) -> String {
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let stem = stem.replace('_', " ");
@@ -123,13 +122,13 @@ fn clean(text: Option<std::borrow::Cow<'_, str>>, max: usize) -> String {
     text.map(|t| t.chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_owned()).unwrap_or_default()
 }
 
-/// Lee un archivo de audio. La portada (si trae) se guarda en `covers`
-/// con su hash como nombre, así un álbum entero comparte un solo archivo.
+/// Reads an audio file. The cover (if any) is saved in `covers` with its
+/// hash as the name, so a whole album shares a single file.
 pub fn read_track(path: &Path, covers: &Path, now: u64) -> Result<Track, String> {
-    let format = extension(path).ok_or("formato no admitido")?;
+    let format = extension(path).ok_or("unsupported format")?;
     let (size, modified) = stamp(path).map_err(|e| e.to_string())?;
     if size == 0 || size > MAX_AUDIO {
-        return Err("archivo vacío o demasiado grande".into());
+        return Err("empty or too large".into());
     }
     let hash = content_hash(path).map_err(|e| e.to_string())?;
     let mut track = Track {
@@ -144,7 +143,7 @@ pub fn read_track(path: &Path, covers: &Path, now: u64) -> Result<Track, String>
         added: now,
         ..Default::default()
     };
-    // Sin etiquetas legibles la canción sigue valiendo (nombre del archivo).
+    // Without readable tags the song is still fine (file name).
     if let Ok(tagged) = lofty::read_from_path(path) {
         let props = tagged.properties();
         track.duration = props.duration().as_secs_f64();
@@ -164,7 +163,7 @@ pub fn read_track(path: &Path, covers: &Path, now: u64) -> Result<Track, String>
     Ok(track)
 }
 
-/// Guarda la portada (la delantera si hay varias). Devuelve su nombre.
+/// Saves the cover (the front one if there are several). Returns its name.
 fn save_cover(pictures: &[lofty::picture::Picture], covers: &Path) -> Option<String> {
     use lofty::picture::PictureType;
     let picture = pictures
@@ -205,7 +204,7 @@ pub fn save_cover_bytes(data: &[u8], ext: &str, covers: &Path) -> Option<String>
     Some(name)
 }
 
-/// Nombre de portada válido (lo que llega en una URL).
+/// A valid cover name (what comes in a URL).
 pub fn is_cover_name(name: &str) -> bool {
     let Some((stem, ext)) = name.split_once('.') else { return false };
     stem.len() == 20 && stem.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && matches!(ext, "jpg" | "png" | "webp")
@@ -215,13 +214,13 @@ pub fn is_cover_name(name: &str) -> bool {
 pub mod tests {
     use super::*;
 
-    /// WAV PCM de 16 bits con un tono (para pruebas).
+    /// A 16-bit PCM WAV with a tone (for tests).
     pub fn wav(seconds: f32, freqs: &[f32], rate: u32) -> Vec<u8> {
         let samples = (seconds * rate as f32) as usize;
         let mut data = Vec::with_capacity(samples * 2);
         for i in 0..samples {
             let t = i as f32 / rate as f32;
-            // Melodía: cambia de nota cada medio segundo.
+            // A melody: the note changes every half second.
             let f = freqs[(t * 2.0) as usize % freqs.len()];
             let v = (t * f * std::f32::consts::TAU).sin() * 0.5 + (t * f * 2.0 * std::f32::consts::TAU).sin() * 0.2;
             data.extend_from_slice(&((v * 20000.0) as i16).to_le_bytes());
@@ -253,10 +252,10 @@ pub mod tests {
     #[test]
     fn walks_only_audio_and_skips_hidden() {
         let dir = temp_dir("walk");
-        fs::create_dir_all(dir.join("Álbum/Disco 1")).unwrap();
+        fs::create_dir_all(dir.join("Albüm/Disc 1")).unwrap();
         fs::create_dir_all(dir.join("$RECYCLE.BIN")).unwrap();
-        fs::create_dir_all(dir.join(".oculta")).unwrap();
-        for f in ["Álbum/Disco 1/01 - Uno.mp3", "Álbum/cover.jpg", "Álbum/Dos.FLAC", "$RECYCLE.BIN/x.mp3", ".oculta/y.ogg", "notas.txt", "tres.opus"] {
+        fs::create_dir_all(dir.join(".hidden")).unwrap();
+        for f in ["Albüm/Disc 1/01 - One.mp3", "Albüm/cover.jpg", "Albüm/Two.FLAC", "$RECYCLE.BIN/x.mp3", ".hidden/y.ogg", "notes.txt", "three.opus"] {
             fs::write(dir.join(f), b"x").unwrap();
         }
         let mut found: Vec<String> = audio_files(&dir, &AtomicBool::new(false))
@@ -264,16 +263,16 @@ pub mod tests {
             .map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"))
             .collect();
         found.sort();
-        assert_eq!(found, ["tres.opus", "Álbum/Disco 1/01 - Uno.mp3", "Álbum/Dos.FLAC"]);
+        assert_eq!(found, ["Albüm/Disc 1/01 - One.mp3", "Albüm/Two.FLAC", "three.opus"]);
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn ids_names_and_titles() {
-        assert_eq!(track_id(Path::new("C:\\Música\\A.mp3")), track_id(Path::new("c:/música/a.MP3")));
+        assert_eq!(track_id(Path::new("C:\\Muzyka Ż\\A.mp3")), track_id(Path::new("c:/muzyka ż/a.MP3")));
         assert_ne!(track_id(Path::new("C:\\a.mp3")), track_id(Path::new("C:\\b.mp3")));
         assert_eq!(track_id(Path::new("x")).len(), 16);
-        assert_eq!(title_from_file_name(Path::new("03 - Mi tema.mp3")), "Mi tema");
+        assert_eq!(title_from_file_name(Path::new("03 - My song.mp3")), "My song");
         assert_eq!(title_from_file_name(Path::new("TAM033-Ronan_Dec-1-Supernova.mp3")), "TAM033-Ronan Dec-1-Supernova");
         assert_eq!(title_from_file_name(Path::new("1999.mp3")), "1999");
         assert!(is_cover_name("0123456789abcdef0123.jpg"));
@@ -287,19 +286,19 @@ pub mod tests {
     #[test]
     fn reads_a_wav_file() {
         let dir = temp_dir("read");
-        let path = dir.join("07 - Tono de prueba.wav");
+        let path = dir.join("07 - Test tone.wav");
         fs::write(&path, wav(3.0, &[440.0], 22050)).unwrap();
         let track = read_track(&path, &dir.join("covers"), 1234).unwrap();
-        assert_eq!(track.title, "Tono de prueba");
+        assert_eq!(track.title, "Test tone");
         assert_eq!(track.format, "wav");
         assert!((track.duration - 3.0).abs() < 0.05, "{}", track.duration);
         assert_eq!(track.hash, content_hash(&path).unwrap());
         assert_eq!(track.hash.len(), 24);
-        // Un byte distinto en medio cambia la huella.
+        // One different byte in the middle changes the hash.
         let mut bytes = fs::read(&path).unwrap();
         let mid = bytes.len() / 2;
         bytes[mid] ^= 1;
-        let other = dir.join("otro.wav");
+        let other = dir.join("other.wav");
         fs::write(&other, &bytes).unwrap();
         assert_ne!(content_hash(&other).unwrap(), track.hash);
         assert_eq!(sha1_file(&path).unwrap().len(), 40);

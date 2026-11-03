@@ -1,13 +1,13 @@
-//! Servir canciones y portadas a la página de música por el protocolo
-//! propio (`https://ytmp.localhost/media/<id>` y `/cover/<nombre>`).
+//! Serving songs and covers to the music page over the app's own protocol
+//! (`https://ytmp.localhost/media/<id>` and `/cover/<name>`).
 //!
-//! - Solo canciones de la biblioteca (por id; nunca una ruta que llegue en
-//!   la URL) y portadas de la caché.
-//! - Exige la clave de esta sesión (`?k=`), que solo conoce nuestra página:
-//!   otra web abierta en el reproductor no puede pedir tus archivos.
-//! - Rechaza peticiones de otros sitios (`Sec-Fetch-Site: cross-site`).
-//! - Admite `Range` (206) por trozos, para que el audio empiece enseguida y
-//!   se pueda saltar a cualquier punto sin leer el archivo entero.
+//! - Only songs in the library (by id; never a path that comes in the URL)
+//!   and covers from the cache.
+//! - Requires this session's key (`?k=`), which only our page knows: another
+//!   site open in the player cannot ask for your files.
+//! - Rejects requests from other sites (`Sec-Fetch-Site: cross-site`).
+//! - Supports `Range` (206) in chunks, so audio starts right away and can
+//!   jump anywhere without reading the whole file.
 
 use std::{
     borrow::Cow,
@@ -20,7 +20,7 @@ use std::{
 
 use http::{header, HeaderMap, Response, StatusCode};
 
-/// Trozo máximo por respuesta.
+/// Largest chunk per response.
 const CHUNK: u64 = 1024 * 1024;
 const MAX_COVER: u64 = 8 * 1024 * 1024;
 
@@ -32,7 +32,7 @@ pub struct Shared {
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
 
-/// Se llama una vez al arrancar el servicio de música.
+/// Called once when the music service starts.
 pub fn init(key: String, covers: PathBuf) -> &'static Shared {
     SHARED.get_or_init(|| Shared { key, covers, tracks: RwLock::new(HashMap::new()) })
 }
@@ -46,7 +46,7 @@ impl Shared {
         &self.key
     }
 
-    /// Reemplaza la tabla id → (ruta, formato).
+    /// Replaces the id → (path, format) table.
     pub fn set_tracks(&self, tracks: HashMap<String, (PathBuf, String)>) {
         if let Ok(mut map) = self.tracks.write() {
             *map = tracks;
@@ -78,7 +78,7 @@ pub fn mime(format: &str) -> &'static str {
     }
 }
 
-/// `bytes=inicio-[fin]` → (inicio, fin incluido), acotado al tamaño.
+/// `bytes=start-[end]` → (start, inclusive end), bounded by the size.
 pub fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
     let spec = value.trim().strip_prefix("bytes=")?;
     if spec.contains(',') || size == 0 {
@@ -86,7 +86,7 @@ pub fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
     }
     let (start, end) = spec.split_once('-')?;
     let (start, end) = if start.is_empty() {
-        // Sufijo: los últimos N bytes.
+        // Suffix: the last N bytes.
         let n: u64 = end.parse().ok()?;
         (size.saturating_sub(n), size - 1)
     } else {
@@ -105,14 +105,14 @@ fn status(code: StatusCode) -> Reply {
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Cow::Borrowed(&b""[..]))
-        .expect("respuesta válida")
+        .expect("valid response")
 }
 
 fn query_key(query: Option<&str>) -> Option<String> {
     url::form_urlencoded::parse(query?.as_bytes()).find(|(k, _)| k == "k").map(|(_, v)| v.into_owned())
 }
 
-/// ¿Es una ruta de música? Si lo es, la respuesta.
+/// Is it a music path? If so, the response.
 pub fn respond(path: &str, query: Option<&str>, headers: &HeaderMap) -> Option<Reply> {
     let (kind, name) = match path.strip_prefix("/media/") {
         Some(id) => ("media", id),
@@ -146,10 +146,10 @@ fn media(shared: &Shared, id: &str, headers: &HeaderMap) -> Reply {
                     .status(StatusCode::RANGE_NOT_SATISFIABLE)
                     .header(header::CONTENT_RANGE, format!("bytes */{size}"))
                     .body(Cow::Borrowed(&b""[..]))
-                    .expect("respuesta válida");
+                    .expect("valid response");
             }
         },
-        // Sin Range: el primer trozo como 206 (el motor pide el resto).
+        // No Range: the first chunk as 206 (the engine asks for the rest).
         None if size > CHUNK => (0, CHUNK - 1, true),
         None => (0, size.saturating_sub(1), false),
     };
@@ -168,7 +168,7 @@ fn media(shared: &Shared, id: &str, headers: &HeaderMap) -> Reply {
     if partial {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
     }
-    builder.body(Cow::Owned(body)).expect("respuesta válida")
+    builder.body(Cow::Owned(body)).expect("valid response")
 }
 
 fn cover(shared: &Shared, name: &str) -> Reply {
@@ -188,7 +188,7 @@ fn cover(shared: &Shared, name: &str) -> Reply {
         .header(header::CACHE_CONTROL, "private, max-age=86400")
         .header("X-Content-Type-Options", "nosniff")
         .body(Cow::Owned(bytes))
-        .expect("respuesta válida")
+        .expect("valid response")
 }
 
 #[cfg(test)]
@@ -211,21 +211,21 @@ mod tests {
     #[test]
     fn serves_only_known_tracks_with_the_session_key() {
         let dir = temp_dir("serve");
-        let song = dir.join("canción.mp3");
+        let song = dir.join("piosenka 曲.mp3");
         let content: Vec<u8> = (0..(CHUNK as usize * 2 + 500)).map(|i| (i % 253) as u8).collect();
         std::fs::write(&song, &content).unwrap();
         let covers = dir.join("covers");
         std::fs::create_dir_all(&covers).unwrap();
         std::fs::write(covers.join("0123456789abcdef0123.jpg"), [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
-        let shared = init("clave-de-sesion".into(), covers);
+        let shared = init("session-key".into(), covers);
         let id = "00112233aabbccdd";
         shared.set_tracks(HashMap::from([(id.to_owned(), (song.clone(), "mp3".to_owned()))]));
-        let key = Some("k=clave-de-sesion");
+        let key = Some("k=session-key");
         let none = HeaderMap::new();
 
-        assert!(respond("/", key, &none).is_none(), "no es una ruta de música");
+        assert!(respond("/", key, &none).is_none(), "not a music path");
         assert_eq!(respond(&format!("/media/{id}"), None, &none).unwrap().status(), StatusCode::FORBIDDEN);
-        assert_eq!(respond(&format!("/media/{id}"), Some("k=otra"), &none).unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(respond(&format!("/media/{id}"), Some("k=other"), &none).unwrap().status(), StatusCode::FORBIDDEN);
         let mut cross = HeaderMap::new();
         cross.insert("sec-fetch-site", "cross-site".parse().unwrap());
         assert_eq!(respond(&format!("/media/{id}"), key, &cross).unwrap().status(), StatusCode::FORBIDDEN);
@@ -233,13 +233,13 @@ mod tests {
             assert_eq!(respond(bad, key, &none).unwrap().status(), StatusCode::NOT_FOUND, "{bad}");
         }
 
-        // Sin Range: primer trozo como 206.
+        // No Range: the first chunk as 206.
         let first = respond(&format!("/media/{id}"), key, &none).unwrap();
         assert_eq!(first.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(first.headers()["content-range"], format!("bytes 0-{}/{}", CHUNK - 1, content.len()));
         assert_eq!(first.headers()["content-type"], "audio/mpeg");
         assert_eq!(first.body().as_ref(), &content[..CHUNK as usize]);
-        // Range hacia el final.
+        // Range towards the end.
         let mut range = HeaderMap::new();
         range.insert("range", format!("bytes={}-", CHUNK * 2).parse().unwrap());
         let tail = respond(&format!("/media/{id}"), key, &range).unwrap();

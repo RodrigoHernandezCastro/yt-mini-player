@@ -1,3 +1,4 @@
 /target
 /dist/YT-Mini-Player-*
 __pycache__/
+/tests/report/

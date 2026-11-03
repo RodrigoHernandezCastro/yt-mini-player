@@ -1,22 +1,21 @@
-//! Win32 de la barra de música: leer la barra de tareas y mantenerse encima.
+//! The music bar's Win32 side: reading the taskbar and staying above it.
 //!
-//! La barra es una ventana propia, siempre encima (topmost), que nunca se
-//! activa (WS_EX_NOACTIVATE) y que se coloca sobre la barra de tareas. No se
-//! hace hija de la barra de tareas (SetParent entre procesos ata la cola de
-//! entrada del Explorador a la nuestra: si un día la app se cuelga, se
-//! colgaría también la barra de tareas).
+//! The bar is a window of its own, always on top (topmost), that never
+//! activates (WS_EX_NOACTIVATE) and sits over the taskbar. It is not made a
+//! child of the taskbar (SetParent across processes ties File Explorer's
+//! input queue to ours: if the app ever hung, the taskbar would hang too).
 //!
-//! La barra de tareas también es topmost y, cuando se hace clic en ella,
-//! Windows la sube por encima de las demás. Por eso:
-//! - un gancho `EVENT_SYSTEM_FOREGROUND` vuelve a subir la barra al instante
-//!   cuando la barra de tareas pasa a primer plano, y
-//! - `raise_if_covered` (cada pocos cientos de ms mientras se ve) corrige
-//!   cualquier otro caso.
+//! The taskbar is topmost as well and, when clicked, Windows raises it above
+//! the others. So:
+//! - an `EVENT_SYSTEM_FOREGROUND` hook raises the bar again right away when
+//!   the taskbar comes to the foreground, and
+//! - `raise_if_covered` (every few hundred ms while it shows) fixes any
+//!   other case.
 //!
-//! Para no tapar los iconos de las apps, un hilo aparte pregunta cada pocos
-//! segundos a UI Automation dónde están los botones de la barra de tareas
-//! (la de Windows 11 no tiene ventanas Win32 por icono). Si UI Automation
-//! no responde, la barra se coloca igual, solo que sin esa información.
+//! So as not to cover the apps' icons, a separate thread asks UI Automation
+//! every few seconds where the taskbar buttons are (the Windows 11 taskbar
+//! has no Win32 window per icon). If UI Automation does not answer, the bar
+//! is placed anyway, just without that information.
 
 use crate::{dock::Taskbar, platform::Rect};
 
@@ -80,8 +79,7 @@ mod win {
         matches!(class, "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
     }
 
-    /// La barra de tareas principal: su ventana y lo que hace falta para
-    /// colocar la barra.
+    /// The main taskbar: its window and what is needed to place the bar.
     pub fn info() -> Option<(isize, Taskbar)> {
         unsafe {
             let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
@@ -106,15 +104,15 @@ mod win {
         }
     }
 
-    /// ¿Hay una app a pantalla completa en primer plano en ese monitor? (La
-    /// barra de tareas queda debajo y la barra de música debe esconderse.)
+    /// Is a fullscreen app in the foreground on that monitor? (The taskbar is
+    /// then underneath and the music bar must hide.)
     pub fn fullscreen_in_front(monitor: Rect) -> bool {
         unsafe {
             let fg = GetForegroundWindow();
             if fg.is_null() {
                 return false;
             }
-            // El escritorio cubre el monitor, pero no tapa la barra de tareas.
+            // The desktop covers the monitor, but not the taskbar.
             let class = class_name(fg);
             if matches!(class.as_str(), "Progman" | "WorkerW" | "#32769") || is_taskbar_class(&class) {
                 return false;
@@ -132,8 +130,8 @@ mod win {
         }
     }
 
-    /// Sin marco: toda la ventana es área cliente (el webview la llena de
-    /// borde a borde). Se intercepta antes que tao.
+    /// No frame: the whole window is client area (the webview fills it edge
+    /// to edge). Intercepted before tao.
     unsafe extern "system" fn no_frame(
         hwnd: HWND,
         msg: u32,
@@ -143,21 +141,20 @@ mod win {
         _data: usize,
     ) -> LRESULT {
         if msg == WM_NCCALCSIZE && wparam != 0 {
-            // Dejar el rectángulo propuesto tal cual = área cliente completa.
+            // Leaving the proposed rectangle as is = a full client area.
             return 0;
         }
         DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 
-    /// Ajustes de la ventana de la barra (una vez, aún oculta): sin marco,
-    /// fuera de Alt+Tab y esquinas pequeñas, como los elementos de la barra
-    /// de tareas.
+    /// Settings of the bar's window (once, still hidden): no frame, out of
+    /// Alt+Tab and small corners, like the taskbar's own items.
     pub fn prepare(hwnd: isize) {
         unsafe {
             SetWindowSubclass(hwnd as HWND, Some(no_frame), 0x7974_6d62, 0);
             let style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
             SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW as isize);
-            // Que Windows recalcule el marco con el nuevo cálculo.
+            // Make Windows recompute the frame with the new calculation.
             SetWindowPos(
                 hwnd as HWND,
                 std::ptr::null_mut(),
@@ -177,7 +174,7 @@ mod win {
         }
     }
 
-    /// La muestra (o mueve) en `rect`, encima de todo y sin activarla.
+    /// Shows (or moves) it at `rect`, above everything and without activating it.
     pub fn place(hwnd: isize, rect: Rect) {
         unsafe {
             SetWindowPos(
@@ -206,12 +203,12 @@ mod win {
         }
     }
 
-    /// Si la barra de tareas quedó por encima, vuelve a subir la barra.
+    /// If the taskbar ended up above it, raises the bar again.
     pub fn raise_if_covered(hwnd: isize, taskbar: isize) {
         unsafe {
             let ours = hwnd as HWND;
             let mut above = GetWindow(ours, GW_HWNDPREV);
-            // Límite por si el orden Z cambia mientras se recorre.
+            // A limit in case the Z order changes while walking it.
             for _ in 0..4096 {
                 if above.is_null() {
                     return;
@@ -225,8 +222,8 @@ mod win {
         }
     }
 
-    /// Gancho: en cuanto la barra de tareas pasa a primer plano, la barra de
-    /// música vuelve encima. Llamar desde el hilo de la interfaz.
+    /// Hook: as soon as the taskbar comes to the foreground, the music bar
+    /// goes back on top. Call from the UI thread.
     pub fn keep_above(hwnd: isize) {
         BAR.store(hwnd, Ordering::Relaxed);
         if HOOKED.swap(true, Ordering::Relaxed) {
@@ -263,7 +260,7 @@ mod win {
         }
     }
 
-    /// Posición horizontal del cursor (px físicos).
+    /// The cursor's horizontal position (physical px).
     pub fn cursor_x() -> Option<i32> {
         let mut point = POINT { x: 0, y: 0 };
         (unsafe { GetCursorPos(&mut point) } != 0).then_some(point.x)
@@ -271,8 +268,8 @@ mod win {
 
     pub use scan::set_scanning;
 
-    /// Iconos de la barra de tareas vía UI Automation, en un hilo aparte (las
-    /// consultas van al proceso del Explorador y pueden tardar).
+    /// Taskbar icons through UI Automation, on a separate thread (the queries
+    /// go to File Explorer's process and can take a while).
     mod scan {
         use std::{
             sync::{
@@ -295,19 +292,19 @@ mod win {
         use super::{wide, Rect};
 
         const INTERVAL: Duration = Duration::from_secs(3);
-        /// Un resultado más viejo que esto no se usa.
+        /// A result older than this is not used.
         const FRESH: Duration = Duration::from_secs(10);
         const MAX_ITEMS: i32 = 400;
 
         static WANTED: AtomicBool = AtomicBool::new(false);
         static WORKER: OnceLock<Thread> = OnceLock::new();
-        /// Elementos de la barra de tareas: (rectángulo, clase).
+        /// Taskbar items: (rectangle, class).
         type Items = Vec<(Rect, String)>;
         static LATEST: Mutex<Option<(Instant, Items)>> = Mutex::new(None);
 
-        /// Activo mientras la barra se ve; sin coste el resto del tiempo.
+        /// Active while the bar shows; no cost the rest of the time.
         pub fn set_scanning(on: bool) {
-            // Solo al encenderlo se despierta el hilo (se llama en cada revisión).
+            // The thread is only woken when turned on (this is called on every check).
             if WANTED.swap(on, Ordering::Relaxed) || !on {
                 return;
             }

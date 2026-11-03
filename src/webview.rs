@@ -1,20 +1,20 @@
-//! Capa web: WebView2 (vía wry) montado sobre la ventana de tao.
+//! Web layer: WebView2 (through wry) on top of the tao window.
 //!
-//! Seguridad (ver también policy.rs):
-//! - **IPC autenticado**: nuestros scripts van en un único envoltorio que
-//!   guarda, antes de que corra la página, la función real de envío y un
-//!   token de sesión aleatorio. La página puede llamar a `window.ipc`, pero
-//!   sin el token la app descarta el mensaje. A su vez, las funciones que la
-//!   app llama en la página (`__ytmpSync`, `__ytmpToast`) exigen otra clave.
-//! - **Navegación filtrada**: solo https (http en la red local), páginas de
-//!   extensiones instaladas y la pantalla de inicio; en superposición máxima,
-//!   solo el catálogo.
-//! - **Ventanas nuevas**: del catálogo → en esta ventana; el resto → en el
-//!   navegador predeterminado.
-//! - **Descargas bloqueadas** y **permisos denegados** (cámara, micrófono,
-//!   ubicación, notificaciones, portapapeles, archivos...).
-//! - **SmartScreen activo** (wry lo apaga por defecto).
-//! - **Sin guardado de contraseñas ni autorrelleno** en el perfil.
+//! Security (see also policy.rs):
+//! - **Authenticated IPC**: our scripts go in a single wrapper that keeps,
+//!   before the page runs, the real send function and a random session
+//!   token. The page can call `window.ipc`, but without the token the app
+//!   drops the message. In turn, the functions the app calls in the page
+//!   (`__ytmpSync`, `__ytmpToast`, `__ytmpLocale`) require another key.
+//! - **Filtered navigation**: only https (http on the local network),
+//!   installed extensions' pages and the start screen; in maximum overlay
+//!   mode, only the catalog.
+//! - **New windows**: from the catalog → in this window; the rest → in the
+//!   default browser.
+//! - **Downloads blocked** and **permissions denied** (camera, microphone,
+//!   location, notifications, clipboard, files...).
+//! - **SmartScreen on** (wry turns it off by default).
+//! - **No password saving or autofill** in the profile.
 
 use std::sync::{Arc, Mutex};
 
@@ -27,28 +27,57 @@ use crate::{
     policy::{self, Navigation, NewWindow},
 };
 
-/// Protocolo propio de la pantalla de inicio (ver services::HOME_URL).
+/// The start screen's own protocol (see services::HOME_URL).
 const HOME_PROTOCOL: &str = "ytmp";
-/// Arrastre y redimensionado (Alt+clic, bordes, arrastrar el video).
+/// Dragging and resizing (Alt+click, edges, dragging the video).
 const INJECT_JS: &str = include_str!("inject.js");
-/// Barra lateral, menú, atajos locales, modo solo video y avisos.
+/// Side bar, menu, local shortcuts, video-only mode and notices.
 const UI_JS: &str = include_str!("ui.js");
-/// Recarga preventiva en sesiones largas; vive en la página y no usa IPC.
+/// Preventive reload in long sessions; lives in the page and uses no IPC.
 const MAINTENANCE_JS: &str = include_str!("maintenance.js");
-/// Lectura y control de la reproducción (barra de música, bandeja, atajos).
-/// Va primero: debe ejecutarse antes que la página para anotar sus controles.
+/// Reading and controlling playback (music bar, tray, shortcuts). Goes
+/// first: it must run before the page to note its controls.
 const MEDIA_JS: &str = include_str!("media.js");
 
-/// Igual que el valor por defecto de wry, pero SIN desactivar SmartScreen
-/// (`msSmartScreenProtection`): se pueden abrir sitios arbitrarios.
-pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
+/// Like wry's default, but WITHOUT turning SmartScreen off
+/// (`msSmartScreenProtection`): arbitrary sites can be opened. Also:
+/// - sound plays without a click first: the host's window opens in a
+///   guest's player by itself (Watch together), and a player that needs a
+///   click before it is heard would stay silent;
+/// - a page that is not on screen keeps its normal priority: the hidden
+///   page that sends the host's window (cast.rs) decodes and encodes 30
+///   pictures a second, and in the background Windows would starve it
+///   (stutter); the player hidden in the tray keeps playing smoothly too.
+const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI --autoplay-policy=no-user-gesture-required --disable-renderer-backgrounding";
+/// "Hardware acceleration" off: no GPU process for drawing or video, like
+/// the setting of the same name in Chrome or Edge.
+const NO_GPU_ARGS: &str = " --disable-gpu --disable-gpu-compositing";
 
-/// Claves de esta sesión (aleatorias en cada arranque).
+static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Fixed once at startup, before the first webview: every webview shares
+/// one WebView2 environment, which takes its arguments only when created.
+pub fn configure(hardware_acceleration: bool) {
+    let mut args = if hardware_acceleration { BROWSER_ARGS.to_owned() } else { format!("{BROWSER_ARGS}{NO_GPU_ARGS}") };
+    // Only the test build (e2e.rs): DevTools for the Windows tests.
+    if let Some(arg) = crate::e2e::browser_arg() {
+        args.push_str(&arg);
+    }
+    let _ = ARGS.set(args);
+}
+
+/// The arguments for WebView2's browser process.
+pub fn browser_args() -> &'static str {
+    ARGS.get().map_or(BROWSER_ARGS, String::as_str)
+}
+
+/// This session's keys (random on every start).
 #[derive(Clone)]
 pub struct Keys {
-    /// Va delante de cada mensaje IPC de nuestros scripts.
+    /// Goes in front of every IPC message from our scripts.
     pub ipc: String,
-    /// Exigida por las funciones que la app llama en la página.
+    /// Required by the functions the app calls in the page.
     pub host: String,
 }
 
@@ -58,12 +87,12 @@ impl Keys {
     }
 }
 
-/// Envuelve nuestros scripts en un único ámbito con el canal autenticado.
+/// Wraps our scripts in a single scope with the authenticated channel.
 ///
-/// `post_expr` es la expresión que obtiene la función de envío. En la app
-/// es la de WebView2 capturada antes de que corra la página (la página
-/// podría reemplazar `window.chrome.webview.postMessage` después, pero ya
-/// tendremos la original).
+/// `post_expr` is the expression that gets the send function. In the app it
+/// is WebView2's, captured before the page runs (the page could replace
+/// `window.chrome.webview.postMessage` later, but we already have the
+/// original).
 pub fn bundle(post_expr: &str, keys: &Keys) -> String {
     format!(
         r#"(() => {{
@@ -72,15 +101,23 @@ pub fn bundle(post_expr: &str, keys: &Keys) -> String {
   const __ytmpSend = (m) => {{ if (__ytmpPost) {{ try {{ __ytmpPost("{ipc}|" + m); }} catch (_) {{}} }} }};
   const __ytmpHostKey = "{host}";
   const __ytmpShared = Object.create(null);
-  // La pantalla de inicio (nuestra, con CSP estricta) también envía órdenes.
+  // The start screen (ours, with a strict CSP) also sends commands.
   if (window.top === window && location.origin === 'https://ytmp.localhost') {{
     Object.defineProperty(window, '__ytmpHomeSend', {{ value: __ytmpSend }});
   }}
-  // "Mi música": la app le envía su estado (biblioteca, descargas...).
+  // "My music": the app sends it its state (library, downloads...).
   if (window.top === window && location.origin === 'https://ytmp.localhost' && location.pathname === '/music') {{
     Object.defineProperty(window, '__ytmpMusic', {{
       value: (key, message) => {{
         if (key === __ytmpHostKey) window.dispatchEvent(new CustomEvent('ytmp:music', {{ detail: message }}));
+      }},
+    }});
+  }}
+  // The host's window (Watch together): its connection and its state.
+  if (window.top === window && location.origin === 'https://ytmp.localhost' && location.pathname === '/stream') {{
+    Object.defineProperty(window, '__ytmpStream', {{
+      value: (key, message) => {{
+        if (key === __ytmpHostKey) window.dispatchEvent(new CustomEvent('ytmp:stream', {{ detail: message }}));
       }},
     }});
   }}
@@ -93,12 +130,24 @@ pub fn bundle(post_expr: &str, keys: &Keys) -> String {
     )
 }
 
-/// ¿El mensaje viene de la página "Mi música"?
+/// Does the message come from the "My music" page?
 pub fn is_music_page(uri: &wry::http::Uri) -> bool {
-    uri.scheme_str() == Some("https") && uri.host() == Some(crate::services::HOME_HOST) && uri.path() == "/music"
+    is_app_page(uri, "/music")
 }
 
-/// Captura la función real de envío de WebView2 (solo en el marco principal).
+/// Does the message come from the page that shows the host's window?
+pub fn is_stream_page(uri: &wry::http::Uri) -> bool {
+    is_app_page(uri, "/stream")
+}
+
+fn is_app_page(uri: &wry::http::Uri, path: &str) -> bool {
+    uri.scheme_str() == Some("https") && uri.host() == Some(crate::services::HOME_HOST) && uri.path() == path
+}
+
+/// The page that shows the host's window (Watch together).
+pub const STREAM_URL: &str = "https://ytmp.localhost/stream";
+
+/// Captures WebView2's real send function (only in the main frame).
 const POST_EXPR: &str = "(() => { try { const w = window.top === window && window.chrome && window.chrome.webview; return w ? w.postMessage.bind(w) : null; } catch (_) { return null; } })()";
 
 pub struct Options<'a> {
@@ -107,16 +156,16 @@ pub struct Options<'a> {
     pub home_state: SharedHomeState,
     pub proxy: EventLoopProxy<UserEvent>,
     pub keys: Keys,
-    /// Superposición máxima (UIAccess): navegación limitada al catálogo.
+    /// Maximum overlay (UIAccess): navigation limited to the catalog.
     pub overlay: bool,
-    /// Ids de extensiones instaladas (sus páginas se pueden abrir).
+    /// Installed extensions' ids (their pages can be opened).
     pub extension_ids: Arc<Mutex<Vec<String>>>,
 }
 
-/// Crea el webview que ocupa toda el área cliente de la ventana.
+/// Creates the webview that fills the window's client area.
 ///
-/// wry subclasifica la ventana padre y ajusta el controlador de WebView2 en
-/// cada `WM_SIZE`, así que no hace falta propagar redimensionados a mano.
+/// wry subclasses the parent window and resizes the WebView2 controller on
+/// every `WM_SIZE`, so resizes need not be passed on by hand.
 pub fn build(window: &Window, web_context: &mut WebContext, options: Options) -> wry::Result<WebView> {
     let Options { start_url, user_agent, home_state, proxy, keys, overlay, extension_ids } = options;
     let ipc_proxy = proxy.clone();
@@ -126,13 +175,13 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
     let token = keys.ipc.clone();
     let mut builder = WebViewBuilder::new_with_web_context(web_context)
         .with_url(start_url)
-        // Negro en lugar de blanco mientras carga la primera página.
+        // Black instead of white while the first page loads.
         .with_background_color((0, 0, 0, 255))
-        // En Windows wry los inyecta también en iframes; el envoltorio y
-        // cada script se protegen comprobando `window.top`.
+        // On Windows wry injects them into iframes too; the wrapper and each
+        // script guard themselves by checking `window.top`.
         .with_initialization_script(bundle(POST_EXPR, &keys))
         .with_initialization_script(MAINTENANCE_JS)
-        // Asíncrono: las canciones se leen del disco en otro hilo.
+        // Asynchronous: songs are read from disk on another thread.
         .with_asynchronous_custom_protocol(HOME_PROTOCOL.into(), move |_id, request, responder| {
             if request.uri().path().starts_with("/media/") {
                 let home_state = home_state.clone();
@@ -142,10 +191,10 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
             }
         })
         .with_ipc_handler(move |request: Request<String>| {
-            // Sin el token de esta sesión, el mensaje lo escribió la página.
+            // Without this session's token, the page wrote the message.
             let Some(message) = policy::authenticate(request.body(), &token) else { return };
             if message.starts_with("music:") {
-                // Solo nuestra página de música puede usar su protocolo.
+                // Only our music page can use its protocol.
                 if is_music_page(request.uri()) {
                     if let Some(command) = ipc::parse_music(message) {
                         let _ = ipc_proxy.send_event(UserEvent::Command(command));
@@ -153,8 +202,17 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
                 }
                 return;
             }
+            if message.starts_with("stream:") {
+                // Likewise the page with the host's window.
+                if is_stream_page(request.uri()) {
+                    if let Some(command) = ipc::parse_stream(message) {
+                        let _ = ipc_proxy.send_event(UserEvent::Command(command));
+                    }
+                }
+                return;
+            }
             if let Some(command) = ipc::parse(message) {
-                // Solo falla si el bucle de eventos ya terminó.
+                // Only fails if the event loop has already ended.
                 let _ = ipc_proxy.send_event(UserEvent::Command(command));
             }
         })
@@ -176,15 +234,13 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
             let command = match policy::new_window(&url, overlay) {
                 NewWindow::SameWindow(url) => Command::Navigate(url),
                 NewWindow::External(url) => Command::OpenExternal(url),
-                NewWindow::Deny => Command::Blocked("ventana emergente bloqueada".to_owned()),
+                NewWindow::Deny => Command::Blocked("blocked.popup".to_owned()),
             };
             let _ = popup_proxy.send_event(UserEvent::Command(command));
             NewWindowResponse::Deny
         })
         .with_download_started_handler(move |_url, _path| {
-            let _ = download_proxy.send_event(UserEvent::Command(Command::Blocked(
-                "las descargas están desactivadas en el reproductor".to_owned(),
-            )));
+            let _ = download_proxy.send_event(UserEvent::Command(Command::Blocked("blocked.download".to_owned())));
             false
         })
         .with_permission_handler(permission);
@@ -193,10 +249,10 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
     {
         use wry::WebViewBuilderExtWindows;
         builder = builder
-            // https://ytmp.localhost: contexto seguro (necesario para el DRM).
+            // https://ytmp.localhost: a secure context (needed for DRM).
             .with_https_scheme(true)
-            .with_additional_browser_args(BROWSER_ARGS)
-            // Las extensiones se instalan después, una a una (extensions.rs).
+            .with_additional_browser_args(browser_args())
+            // Extensions are installed later, one by one (extensions.rs).
             .with_browser_extensions_enabled(true);
     }
 
@@ -209,9 +265,9 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
     Ok(webview)
 }
 
-/// Permisos: se deniega todo lo que un reproductor no necesita. El DRM no
-/// pasa por aquí como permiso propio; lo desconocido sigue el comportamiento
-/// por defecto para no romperlo.
+/// Permissions: everything a player does not need is denied. DRM does not
+/// come through here as a permission of its own; unknown kinds keep the
+/// default behaviour so as not to break it.
 pub fn permission(kind: PermissionKind) -> PermissionResponse {
     match kind {
         PermissionKind::Autoplay => PermissionResponse::Allow,
@@ -220,7 +276,7 @@ pub fn permission(kind: PermissionKind) -> PermissionResponse {
     }
 }
 
-/// Ajustes del perfil que wry no expone.
+/// Profile settings wry does not expose.
 #[cfg(windows)]
 pub fn harden(webview: &WebView) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -233,13 +289,13 @@ pub fn harden(webview: &WebView) {
     let core = webview.webview();
     let result = unsafe {
         core.Settings().and_then(|settings| {
-            // Nada de objetos del host en la página.
+            // No host objects in the page.
             settings.SetAreHostObjectsAllowed(false)?;
-            // Contraseñas y formularios: el perfil no guarda ninguno.
+            // Passwords and forms: the profile keeps none.
             let s4 = settings.cast::<ICoreWebView2Settings4>()?;
             s4.SetIsPasswordAutosaveEnabled(false)?;
             s4.SetIsGeneralAutofillEnabled(false)?;
-            // SmartScreen (si el runtime lo admite).
+            // SmartScreen (if the runtime supports it).
             if let Ok(s8) = settings.cast::<ICoreWebView2Settings8>() {
                 s8.SetIsReputationCheckingRequired(true)?;
             }
@@ -247,7 +303,7 @@ pub fn harden(webview: &WebView) {
         })
     };
     if let Err(err) = result {
-        eprintln!("no se pudieron aplicar los ajustes de seguridad: {err}");
+        eprintln!("could not apply the security settings: {err}");
     }
     let tracking = unsafe {
         core.cast::<ICoreWebView2_13>()
@@ -256,15 +312,57 @@ pub fn harden(webview: &WebView) {
             .and_then(|p| p.SetPreferredTrackingPreventionLevel(COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BALANCED))
     };
     if let Err(err) = tracking {
-        eprintln!("prevención de rastreo no disponible: {err}");
+        eprintln!("tracking prevention unavailable: {err}");
     }
 }
 
 #[cfg(not(windows))]
 pub fn harden(_: &WebView) {}
 
-/// Borra cookies, almacenamiento, caché, historial y lo que el sitio guardó
-/// (cierra la sesión en todos los servicios). `done` recibe si funcionó.
+/// Watches a webview's processes: if one dies (renderer, GPU, the whole
+/// browser), the diary says which and why (diag.rs).
+#[cfg(windows)]
+pub fn watch_processes(webview: &WebView, label: &'static str) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2ProcessFailedEventArgs2, COREWEBVIEW2_PROCESS_FAILED_KIND,
+            COREWEBVIEW2_PROCESS_FAILED_REASON,
+        },
+        ProcessFailedEventHandler,
+    };
+    use windows::core::Interface;
+    use wry::WebViewExtWindows;
+
+    let handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(-1);
+        unsafe {
+            let _ = args.ProcessFailedKind(&mut kind);
+        }
+        let mut detail = String::new();
+        if let Ok(args2) = args.cast::<ICoreWebView2ProcessFailedEventArgs2>() {
+            let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON(-1);
+            let mut code = 0i32;
+            unsafe {
+                let _ = args2.Reason(&mut reason);
+                let _ = args2.ExitCode(&mut code);
+            }
+            detail = format!(" reason={} exit=0x{:08x}", reason.0, code as u32);
+        }
+        crate::diag::note(format!("webview {label}: process failed, kind={}{detail}", kind.0));
+        Ok(())
+    }));
+    let mut token = 0i64;
+    unsafe {
+        let _ = webview.webview().add_ProcessFailed(&handler, &mut token);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn watch_processes(_: &WebView, _: &'static str) {}
+
+/// Clears cookies, storage, cache, history and whatever sites saved (signs
+/// out of every service). `done` receives whether it worked.
 #[cfg(windows)]
 pub fn clear_browsing_data(webview: &WebView, done: impl FnOnce(bool) + 'static) {
     use webview2_com::{
@@ -306,7 +404,7 @@ pub fn clear_browsing_data(_: &WebView, done: impl FnOnce(bool) + 'static) {
     done(false);
 }
 
-/// Cambia el User-Agent; se aplica a la siguiente navegación.
+/// Changes the User-Agent; it applies to the next navigation.
 #[cfg(windows)]
 pub fn set_user_agent(webview: &WebView, user_agent: &str) {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
@@ -321,7 +419,7 @@ pub fn set_user_agent(webview: &WebView, user_agent: &str) {
             .and_then(|settings| settings.SetUserAgent(&HSTRING::from(user_agent)))
     };
     if let Err(err) = result {
-        eprintln!("no se pudo cambiar el User-Agent: {err}");
+        eprintln!("could not change the User-Agent: {err}");
     }
 }
 
@@ -338,12 +436,23 @@ mod tests {
         let js = bundle("null", &keys);
         assert!(js.starts_with("(() => {"));
         assert!(js.trim_end().ends_with("})();"));
-        // Las claves solo aparecen en el envoltorio, nunca en globales.
+        // The keys only appear in the wrapper, never in globals.
         assert_eq!(js.matches(&keys.ipc).count(), 1);
         assert_eq!(js.matches(&keys.host).count(), 1);
-        assert!(!js.contains("window.ipc.postMessage"), "ningún script usa el canal sin token");
+        assert!(!js.contains("window.ipc.postMessage"), "no script uses the channel without the token");
         assert!(!js.contains("window.__ytmpStartDrag"));
-        assert!(js.contains("location.pathname === '/music'"), "el puente de música solo existe en su página");
+        assert!(js.contains("location.pathname === '/music'"), "the music bridge only exists on its page");
+        assert!(js.contains("location.pathname === '/stream'"), "nor the window's");
+    }
+
+    #[test]
+    fn hardware_acceleration_turns_the_gpu_off_only_when_asked() {
+        assert!(!browser_args().contains("--disable-gpu") || ARGS.get().is_some());
+        assert!(NO_GPU_ARGS.contains("--disable-gpu ") && NO_GPU_ARGS.contains("--disable-gpu-compositing"));
+        assert!(!BROWSER_ARGS.contains("SmartScreen"), "SmartScreen stays on");
+        assert!(BROWSER_ARGS.contains("--autoplay-policy=no-user-gesture-required"), "the shared window is heard at once");
+        assert!(BROWSER_ARGS.contains("--disable-renderer-backgrounding"), "the sending page is not starved");
+        assert_eq!(BROWSER_ARGS.matches("--disable-features").count(), 1, "one list (a second one would replace it)");
     }
 
     #[test]
@@ -354,6 +463,10 @@ mod tests {
         for other in ["https://ytmp.localhost/", "https://ytmp.localhost/music/x", "https://www.youtube.com/music",
                       "http://ytmp.localhost/music", "https://ytmp.localhost.evil.com/music"] {
             assert!(!is_music_page(&uri(other)), "{other}");
+        }
+        assert!(is_stream_page(&uri(STREAM_URL)));
+        for other in ["https://ytmp.localhost/music", "https://evil.example/stream", "https://ytmp.localhost/stream/x"] {
+            assert!(!is_stream_page(&uri(other)), "{other}");
         }
     }
 
@@ -373,6 +486,6 @@ mod tests {
             assert_eq!(permission(kind), PermissionResponse::Deny, "{kind}");
         }
         assert_eq!(permission(PermissionKind::Autoplay), PermissionResponse::Allow);
-        assert_eq!(permission(PermissionKind::MediaKeySystemAccess), PermissionResponse::Default, "no romper el DRM");
+        assert_eq!(permission(PermissionKind::MediaKeySystemAccess), PermissionResponse::Default, "do not break DRM");
     }
 }

@@ -1,23 +1,24 @@
-//! Extensiones de Chrome cargadas en WebView2.
+//! Chrome extensions loaded into WebView2.
 //!
-//! WebView2 no tiene Chrome Web Store ni barra de extensiones: solo carga
-//! extensiones *descomprimidas* desde una carpeta. Este módulo:
+//! WebView2 has no Chrome Web Store or extensions toolbar: it only loads
+//! *unpacked* extensions from a folder. This module:
 //!
-//! 1. Descomprime los `.crx` y `.zip` que el usuario deja en la carpeta de
-//!    extensiones (y aparta el archivo original a `.archivos\`).
-//! 2. Valida cada subcarpeta (debe tener `manifest.json`) y lee su nombre.
-//! 3. En Windows, sincroniza con el perfil de WebView2: instala las nuevas,
-//!    desinstala las que el usuario borró y permite activarlas o no.
+//! 1. Unpacks the `.crx` and `.zip` files the user drops into the extensions
+//!    folder (and moves the original file to `.archives\`).
+//! 2. Validates each subfolder (it must have a `manifest.json`) and reads
+//!    its name.
+//! 3. On Windows, syncs with the WebView2 profile: installs new ones,
+//!    uninstalls the ones the user deleted and lets them be turned on or off.
 //!
-//! No se usa `with_extensions_path` de wry porque intenta instalar *cualquier*
-//! entrada de la carpeta y, si una falla, aborta la creación del webview.
+//! wry's `with_extensions_path` is not used because it tries to install
+//! *any* entry of the folder and, if one fails, aborts creating the webview.
 //!
-//! Seguridad: la carpeta la puede escribir cualquier programa del usuario, y
-//! una extensión ve las páginas (y las sesiones) donde se ejecuta. Por eso
-//! cada extensión tiene una **huella SHA-256** de todo su contenido y solo se
-//! carga si el usuario la aprobó en un diálogo del sistema que muestra sus
-//! permisos (app.rs). Si cambia un solo byte, se vuelve a preguntar. Al
-//! descomprimir se limitan el número de archivos y el tamaño total.
+//! Security: any program of the user can write to the folder, and an
+//! extension sees the pages (and sessions) it runs on. That is why each
+//! extension has a **SHA-256 fingerprint** of all its content and is only
+//! loaded if the user approved it in a system dialog that shows its
+//! permissions (app.rs). If a single byte changes, the user is asked again.
+//! Unpacking limits the number of files and the total size.
 
 use std::{
     fs,
@@ -29,41 +30,43 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Carpeta (dentro de la de extensiones) donde se apartan los `.crx`/`.zip`
-/// ya descomprimidos. Empieza por punto para que el escaneo la ignore.
-const ARCHIVE_DIR: &str = ".archivos";
-/// Límites al descomprimir (contra "bombas ZIP").
+/// Folder (inside the extensions folder) where unpacked `.crx`/`.zip` files
+/// are moved. It starts with a dot so the scan ignores it.
+const ARCHIVE_DIR: &str = ".archives";
+/// Its name up to 0.7.0, renamed on the next scan.
+const OLD_ARCHIVE_DIR: &str = ".archivos";
+/// Unpacking limits (against "ZIP bombs").
 const MAX_ENTRIES: usize = 10_000;
 const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
 
-/// Extensión válida encontrada en disco.
+/// A valid extension found on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalExtension {
-    /// Nombre de la subcarpeta; es la clave estable de la extensión.
+    /// Name of the subfolder; the extension's stable key.
     pub folder: String,
-    /// Carpeta que contiene `manifest.json` (puede ser una subcarpeta).
+    /// Folder that contains `manifest.json` (it may be a subfolder).
     pub path: PathBuf,
     pub name: String,
     pub version: String,
-    /// Página de opciones o, si no hay, la ventana emergente del botón.
+    /// Options page or, if there is none, the button's popup.
     pub page: Option<String>,
-    /// Permisos y sitios a los que accede (del manifest).
+    /// Permissions and sites it accesses (from the manifest).
     pub permissions: Vec<String>,
-    /// ¿Puede leer y cambiar todas las páginas?
+    /// Can it read and change every page?
     pub all_sites: bool,
-    /// SHA-256 (hex) de todo su contenido.
+    /// SHA-256 (hex) of all its content.
     pub fingerprint: String,
 }
 
-/// Resultado de preparar la carpeta de extensiones.
+/// Result of preparing the extensions folder.
 #[derive(Debug, Default)]
 pub struct Scan {
     pub extensions: Vec<LocalExtension>,
-    /// Mensajes legibles para el usuario (archivo corrupto, sin manifest...).
+    /// Messages for the user (corrupt file, no manifest...), already in the current language.
     pub problems: Vec<String>,
 }
 
-/// Estado de una extensión tal como lo ve la página.
+/// An extension's state as the page sees it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionStatus {
@@ -74,7 +77,7 @@ pub struct ExtensionStatus {
     pub enabled: bool,
     pub has_page: bool,
     pub error: Option<String>,
-    /// `true` mientras WebView2 aún no ha confirmado la instalación.
+    /// `true` while WebView2 has not confirmed the install yet.
     pub pending: bool,
 }
 
@@ -93,24 +96,28 @@ impl ExtensionStatus {
     }
 }
 
-/// Resultados asíncronos de WebView2, enviados al bucle de eventos.
+/// WebView2's asynchronous results, sent to the event loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtensionEvent {
     Installed { folder: String, id: String, enabled: bool },
     Failed { folder: String, error: String },
     Toggled { id: String, enabled: bool },
     Removed { id: String },
-    /// El runtime no soporta extensiones (anterior a la versión 118, aprox.).
+    /// The runtime does not support extensions (older than about version 118).
     Unsupported(String),
 }
 
-/// Descomprime archivos pendientes y lista las extensiones válidas.
+/// Unpacks pending archives and lists the valid extensions.
 pub fn scan(dir: &Path) -> Scan {
     let mut scan = Scan::default();
+    let (old, new) = (dir.join(OLD_ARCHIVE_DIR), dir.join(ARCHIVE_DIR));
+    if old.is_dir() && !new.exists() {
+        let _ = fs::rename(&old, &new);
+    }
     unpack_archives(dir, &mut scan.problems);
 
     let Ok(entries) = fs::read_dir(dir) else {
-        scan.problems.push(format!("No se pudo leer {}", dir.display()));
+        scan.problems.push(t!("ext.unreadable_folder", path = dir.display()));
         return scan;
     };
     let mut folders: Vec<_> = entries
@@ -124,7 +131,7 @@ pub fn scan(dir: &Path) -> Scan {
     for folder in folders {
         let base = dir.join(&folder);
         let Some(root) = manifest_root(&base) else {
-            scan.problems.push(format!("«{folder}» no tiene manifest.json"));
+            scan.problems.push(t!("ext.no_manifest", folder = folder));
             continue;
         };
         let manifest = read_manifest(&root);
@@ -140,16 +147,16 @@ pub fn scan(dir: &Path) -> Scan {
                 permissions: m.permissions,
                 fingerprint,
             }),
-            (Err(err), _) => scan.problems.push(format!("«{folder}»: {err}")),
-            (_, Err(err)) => scan.problems.push(format!("«{folder}»: no se pudo leer ({err})")),
+            (Err(err), _) => scan.problems.push(t!("ext.problem", folder = folder, error = err)),
+            (_, Err(err)) => scan.problems.push(t!("ext.unreadable", folder = folder, error = fingerprint_error(&err))),
         }
     }
     scan
 }
 
-/// Descomprime cada `.crx` y `.zip` de la raíz en una carpeta con su nombre
-/// (reemplazándola si existía: así se actualiza una extensión) y aparta el
-/// archivo a `.archivos\`.
+/// Unpacks each `.crx` and `.zip` at the top into a folder with its name
+/// (replacing it if it existed: that is how an extension is updated) and
+/// moves the file to `.archives\`.
 fn unpack_archives(dir: &Path, problems: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.filter_map(Result::ok) {
@@ -171,8 +178,8 @@ fn unpack_archives(dir: &Path, problems: &mut Vec<String>) {
             .map_err(|e| e.to_string())
             .and_then(|bytes| {
                 let payload = crx_payload(&bytes)?;
-                // Se descomprime en una carpeta temporal y solo se reemplaza
-                // la anterior si todo salió bien.
+                // Unpacked into a temporary folder; the previous one is only
+                // replaced if everything went well.
                 let tmp = dir.join(format!(".tmp-{folder}"));
                 let _ = fs::remove_dir_all(&tmp);
                 extract_zip(payload, &tmp).inspect_err(|_| {
@@ -180,7 +187,7 @@ fn unpack_archives(dir: &Path, problems: &mut Vec<String>) {
                 })?;
                 if manifest_root(&tmp).is_none() {
                     let _ = fs::remove_dir_all(&tmp);
-                    return Err("el archivo no contiene manifest.json".into());
+                    return Err(t!("ext.archive_no_manifest"));
                 }
                 if dest.exists() {
                     fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
@@ -194,62 +201,62 @@ fn unpack_archives(dir: &Path, problems: &mut Vec<String>) {
                 let moved = fs::create_dir_all(&archive_dir)
                     .and_then(|_| fs::rename(&path, archive_dir.join(&file_name)));
                 if moved.is_err() {
-                    // Si no se puede apartar, se borra para no reinstalarlo
-                    // en cada arranque.
+                    // If it cannot be moved away, it is deleted so it is not
+                    // reinstalled on every start.
                     let _ = fs::remove_file(&path);
                 }
             }
-            Err(err) => problems.push(format!("«{file_name}»: {err}")),
+            Err(err) => problems.push(t!("ext.problem", folder = file_name, error = err)),
         }
     }
 }
 
-/// Devuelve el ZIP contenido en un `.crx` (versiones 2 y 3), o los mismos
-/// bytes si ya es un ZIP.
+/// Returns the ZIP inside a `.crx` (versions 2 and 3), or the same bytes if
+/// it already is a ZIP.
 pub fn crx_payload(bytes: &[u8]) -> Result<&[u8], String> {
     if bytes.starts_with(b"PK\x03\x04") {
         return Ok(bytes);
     }
     if !bytes.starts_with(b"Cr24") {
-        return Err("no es un .crx ni un .zip válido".into());
+        return Err(t!("ext.not_an_archive"));
     }
     let u32_at = |offset: usize| -> Result<usize, String> {
         bytes
             .get(offset..offset + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
-            .ok_or_else(|| "cabecera .crx truncada".to_string())
+            .ok_or_else(|| t!("ext.bad_crx"))
     };
     let start = match u32_at(4)? {
-        // Cr24 | versión | longitud de la cabecera | cabecera | zip
+        // Cr24 | version | header length | header | zip
         3 => 12usize.checked_add(u32_at(8)?),
-        // Cr24 | versión | long. clave | long. firma | clave | firma | zip
+        // Cr24 | version | key length | signature length | key | signature | zip
         2 => 16usize.checked_add(u32_at(8)?).and_then(|n| n.checked_add(u32_at(12).ok()?)),
-        v => return Err(format!("versión de .crx no soportada ({v})")),
+        v => return Err(t!("ext.crx_version", version = v)),
     }
-    .ok_or("cabecera .crx inválida")?;
-    let payload = bytes.get(start..).ok_or("cabecera .crx inválida")?;
+    .ok_or_else(|| t!("ext.bad_crx"))?;
+    let payload = bytes.get(start..).ok_or_else(|| t!("ext.bad_crx"))?;
     if !payload.starts_with(b"PK") {
-        return Err("el .crx no contiene un ZIP".into());
+        return Err(t!("ext.bad_crx"));
     }
     Ok(payload)
 }
 
-/// Extrae un ZIP en `dest`, rechazando rutas que escapen de la carpeta.
+/// Extracts a ZIP into `dest`, rejecting paths that escape the folder.
 fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ZIP inválido: {e}"))?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| t!("ext.bad_zip", error = e))?;
     if archive.len() > MAX_ENTRIES {
-        return Err(format!("el ZIP tiene demasiados archivos (más de {MAX_ENTRIES})"));
+        return Err(t!("ext.zip_too_many", max = MAX_ENTRIES));
     }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    // Presupuesto total: se cuenta lo que realmente sale al descomprimir (los
-    // tamaños declarados en el ZIP pueden mentir).
+    // Total budget: what actually comes out is counted (the sizes the ZIP
+    // declares can lie).
     let mut budget = MAX_UNPACKED;
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| format!("ZIP inválido: {e}"))?;
-        // `enclosed_name` descarta rutas absolutas y con `..`.
+        let mut file = archive.by_index(i).map_err(|e| t!("ext.bad_zip", error = e))?;
+        // `enclosed_name` rejects absolute paths and paths with `..`.
         let Some(relative) = file.enclosed_name() else {
             let name = file.name().map(|n| n.into_owned()).unwrap_or_default();
-            return Err(format!("ruta no permitida en el ZIP: {name}"));
+            return Err(t!("ext.zip_bad_path", name = name));
         };
         let out = dest.join(relative);
         if file.is_dir() {
@@ -261,7 +268,7 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
             let mut writer = fs::File::create(&out).map_err(|e| e.to_string())?;
             let written = io::copy(&mut io::Read::take(&mut file, budget + 1), &mut writer).map_err(|e| e.to_string())?;
             if written > budget {
-                return Err(format!("el ZIP descomprimido supera {} MB", MAX_UNPACKED / (1024 * 1024)));
+                return Err(t!("ext.zip_too_big", size = MAX_UNPACKED / (1024 * 1024)));
             }
             budget -= written;
         }
@@ -269,8 +276,8 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Carpeta con `manifest.json`: la propia carpeta o, si no lo tiene, su
-/// única subcarpeta (los ZIP de GitHub suelen traer una carpeta envolvente).
+/// The folder with `manifest.json`: the folder itself or, if it has none,
+/// its only subfolder (GitHub ZIPs usually have a wrapping folder).
 fn manifest_root(dir: &Path) -> Option<PathBuf> {
     if dir.join("manifest.json").is_file() {
         return Some(dir.to_path_buf());
@@ -287,7 +294,7 @@ fn manifest_root(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Lo que importa del manifest.
+/// What matters in the manifest.
 struct Manifest {
     name: String,
     version: String,
@@ -295,13 +302,13 @@ struct Manifest {
     permissions: Vec<String>,
 }
 
-/// Patrones que dan acceso a todas las páginas.
+/// Patterns that give access to every page.
 fn is_all_sites(pattern: &str) -> bool {
     matches!(pattern, "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*" | "*://*/" | "file:///*")
 }
 
-/// Huella SHA-256 de una carpeta: rutas relativas (ordenadas, con `/`),
-/// tamaños y contenido de cada archivo. Cambia si cambia cualquier byte.
+/// SHA-256 fingerprint of a folder: relative paths (sorted, with `/`),
+/// sizes and content of each file. It changes if any byte changes.
 pub fn fingerprint(dir: &Path) -> io::Result<String> {
     let mut files = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -310,7 +317,7 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
             let entry = entry?;
             let kind = entry.file_type()?;
             if kind.is_symlink() {
-                return Err(io::Error::other("contiene enlaces simbólicos"));
+                return Err(io::Error::other(FINGERPRINT_SYMLINK));
             }
             if kind.is_dir() {
                 stack.push(entry.path());
@@ -319,7 +326,7 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
             }
         }
         if files.len() > MAX_ENTRIES {
-            return Err(io::Error::other("demasiados archivos"));
+            return Err(io::Error::other(FINGERPRINT_TOO_MANY));
         }
     }
     let relative = |p: &Path| {
@@ -332,7 +339,7 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
         let bytes = fs::read(&path)?;
         total += bytes.len() as u64;
         if total > MAX_UNPACKED {
-            return Err(io::Error::other("demasiado grande"));
+            return Err(io::Error::other(FINGERPRINT_TOO_BIG));
         }
         hasher.update(relative(&path).as_bytes());
         hasher.update([0]);
@@ -342,14 +349,28 @@ pub fn fingerprint(dir: &Path) -> io::Result<String> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Lee nombre, versión, página de opciones/emergente y permisos del manifest.
+const FINGERPRINT_SYMLINK: &str = "symlinks";
+const FINGERPRINT_TOO_MANY: &str = "too many files";
+const FINGERPRINT_TOO_BIG: &str = "too big";
+
+/// The reason a folder could not be fingerprinted, for the user.
+fn fingerprint_error(err: &io::Error) -> String {
+    match err.to_string().as_str() {
+        FINGERPRINT_SYMLINK => t!("ext.symlinks"),
+        FINGERPRINT_TOO_MANY => t!("ext.too_many_files"),
+        FINGERPRINT_TOO_BIG => t!("ext.too_big"),
+        other => other.to_owned(),
+    }
+}
+
+/// Reads name, version, options/popup page and permissions from the manifest.
 fn read_manifest(root: &Path) -> Result<Manifest, String> {
     let text = fs::read_to_string(root.join("manifest.json")).map_err(|e| e.to_string())?;
-    // Algunos manifest traen BOM.
+    // Some manifests have a BOM.
     let manifest: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
-        .map_err(|e| format!("manifest.json inválido: {e}"))?;
+        .map_err(|e| t!("ext.bad_manifest", error = e))?;
 
-    let raw_name = manifest.get("name").and_then(Value::as_str).ok_or("manifest.json sin «name»")?;
+    let raw_name = manifest.get("name").and_then(Value::as_str).ok_or_else(|| t!("ext.manifest_no_name"))?;
     let name = localize(root, &manifest, raw_name);
     let version = manifest.get("version").and_then(Value::as_str).unwrap_or("").to_owned();
 
@@ -366,8 +387,8 @@ fn read_manifest(root: &Path) -> Result<Manifest, String> {
     .find(|p| !p.is_empty() && !p.contains("..") && !p.contains("://"))
     .map(str::to_owned);
 
-    // Permisos (v2 mezcla sitios y APIs en "permissions"; v3 los separa) y
-    // sitios donde inyecta scripts.
+    // Permissions (v2 mixes sites and APIs in "permissions"; v3 separates
+    // them) and the sites it injects scripts into.
     let mut permissions: Vec<String> = ["/permissions", "/host_permissions", "/optional_host_permissions"]
         .into_iter()
         .filter_map(|p| manifest.pointer(p)?.as_array().cloned())
@@ -388,7 +409,8 @@ fn read_manifest(root: &Path) -> Result<Manifest, String> {
     Ok(Manifest { name, version, page, permissions })
 }
 
-/// Resuelve `__MSG_clave__` con `_locales/<default_locale>/messages.json`.
+/// Resolves `__MSG_key__` from `_locales/<locale>/messages.json`: the app's
+/// language first, then the extension's default, then English.
 fn localize(root: &Path, manifest: &Value, value: &str) -> String {
     let Some(key) = value.strip_prefix("__MSG_").and_then(|v| v.strip_suffix("__")) else {
         return value.to_owned();
@@ -400,7 +422,7 @@ fn localize(root: &Path, manifest: &Value, value: &str) -> String {
             fs::read_to_string(path).ok()?.trim_start_matches('\u{feff}'),
         )
         .ok()?;
-        // Las claves no distinguen mayúsculas en Chromium.
+        // Keys are case-insensitive in Chromium.
         let entry = messages
             .as_object()?
             .iter()
@@ -408,10 +430,10 @@ fn localize(root: &Path, manifest: &Value, value: &str) -> String {
             .1;
         entry.get("message")?.as_str().map(str::to_owned)
     };
-    ["es", locale, "en"].into_iter().find_map(lookup).unwrap_or_else(|| key.to_owned())
+    [crate::i18n::current().code(), locale, "en"].into_iter().find_map(lookup).unwrap_or_else(|| key.to_owned())
 }
 
-/// Nombre de carpeta seguro a partir del nombre del archivo.
+/// A safe folder name from the file name.
 fn sanitize_folder_name(stem: &str) -> String {
     let cleaned: String = stem
         .chars()
@@ -426,7 +448,7 @@ fn sanitize_folder_name(stem: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Integración con WebView2 (solo Windows)
+// WebView2 integration (Windows only)
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
@@ -506,7 +528,7 @@ mod host {
             Self { profile: profile.ok(), proxy }
         }
 
-        /// Lista lo instalado y llama a `f` con ello en el hilo de la UI.
+        /// Lists what is installed and calls `f` with it on the UI thread.
         fn with_installed(&self, f: impl FnOnce(Vec<Installed>, &Proxy) + 'static) {
             let Some(profile) = &self.profile else { return };
             let proxy = self.proxy.clone();
@@ -533,15 +555,15 @@ mod host {
             }
         }
 
-        /// Instala las extensiones nuevas, informa de las ya instaladas y
-        /// desinstala las que se instalaron antes pero ya no están en disco.
+        /// Installs new extensions, reports the ones already installed and
+        /// uninstalls those installed before that are no longer on disk.
         pub fn sync(&self, local: Vec<LocalExtension>, known: ExtensionIds) {
             let Some(profile) = self.profile.clone() else { return };
             self.with_installed(move |installed, proxy| {
                 let by_id: HashMap<&str, &Installed> =
                     installed.iter().map(|i| (i.id.as_str(), i)).collect();
 
-                // 1. Desinstalar lo que instalamos y ya no existe en disco.
+                // 1. Uninstall what we installed that no longer exists on disk.
                 let wanted: Vec<&str> = local
                     .iter()
                     .filter_map(|ext| known.get(&ext.folder).map(String::as_str))
@@ -568,7 +590,7 @@ mod host {
                     }
                 }
 
-                // 2. Informar de las instaladas e instalar las nuevas.
+                // 2. Report the installed ones and install the new ones.
                 for ext in local {
                     if let Some(item) = known.get(&ext.folder).and_then(|id| by_id.get(id.as_str())) {
                         let _ = proxy.send_event(UserEvent::Extension(ExtensionEvent::Installed {
@@ -634,7 +656,7 @@ mod host {
     }
 }
 
-/// Fuera de Windows no hay WebView2: el host no hace nada.
+/// Outside Windows there is no WebView2: the host does nothing.
 #[cfg(not(windows))]
 pub struct ExtensionHost;
 
@@ -675,7 +697,7 @@ mod tests {
     }
 
     fn crx3(zip: &[u8]) -> Vec<u8> {
-        let header = b"cabecera-protobuf-falsa";
+        let header = b"fake-protobuf-header";
         let mut out = b"Cr24".to_vec();
         out.extend(3u32.to_le_bytes());
         out.extend((header.len() as u32).to_le_bytes());
@@ -702,7 +724,7 @@ mod tests {
         assert_eq!(crx_payload(&zip).unwrap(), zip.as_slice());
         assert_eq!(crx_payload(&crx3(&zip)).unwrap(), zip.as_slice());
         assert_eq!(crx_payload(&crx2(&zip)).unwrap(), zip.as_slice());
-        assert!(crx_payload(b"hola").is_err());
+        assert!(crx_payload(b"hello").is_err());
         assert!(crx_payload(b"Cr24\x03\x00\x00\x00\xff\xff\xff\x7f").is_err());
         assert!(crx_payload(b"Cr24\x09\x00\x00\x00").is_err());
         assert!(crx_payload(b"Cr24").is_err());
@@ -711,35 +733,36 @@ mod tests {
     #[test]
     fn scans_unpacked_and_archives() {
         let dir = temp_dir("scan");
-        // Carpeta descomprimida a mano.
+        // A folder unpacked by hand.
         fs::create_dir_all(dir.join("manual")).unwrap();
         fs::write(dir.join("manual/manifest.json"), MANIFEST).unwrap();
-        // ZIP con carpeta envolvente (como los de GitHub).
+        // A ZIP with a wrapping folder (like GitHub's).
         fs::write(
             dir.join("uBOLite.chromium.zip"),
             zip_bytes(&[("uBOLite/manifest.json", r#"{"name":"uBO Lite","version":"2025.1","action":{"default_popup":"/popup.html"}}"#)]),
         )
         .unwrap();
-        // CRX3 con nombre localizado.
+        // A CRX3 with a localized name.
         fs::write(
             dir.join("Sponsor Block!.crx"),
             crx3(&zip_bytes(&[
                 ("manifest.json", r#"{"name":"__MSG_fullName__","version":"5.0","default_locale":"en"}"#),
-                ("_locales/en/messages.json", r#"{"fullName":{"message":"SponsorBlock"}}"#),
-                ("_locales/es/messages.json", r#"{"FULLNAME":{"message":"SponsorBlock (es)"}}"#),
+                // Keys are case-insensitive; the app's language comes first.
+                ("_locales/en/messages.json", r#"{"FULLNAME":{"message":"SponsorBlock"}}"#),
+                ("_locales/es/messages.json", r#"{"fullName":{"message":"SponsorBlock (es)"}}"#),
             ])),
         )
         .unwrap();
-        // Basura.
-        fs::create_dir_all(dir.join("vacia")).unwrap();
-        fs::write(dir.join("roto.crx"), b"Cr24\x03\x00\x00\x00").unwrap();
-        fs::write(dir.join("LEEME.txt"), "hola").unwrap();
+        // Junk.
+        fs::create_dir_all(dir.join("empty")).unwrap();
+        fs::write(dir.join("broken.crx"), b"Cr24\x03\x00\x00\x00").unwrap();
+        fs::write(dir.join("README.txt"), "hello").unwrap();
 
         let scan = scan(&dir);
         let names: Vec<_> = scan.extensions.iter().map(|e| (e.folder.as_str(), e.name.as_str())).collect();
         assert_eq!(
             names,
-            [("manual", "Demo"), ("Sponsor Block_", "SponsorBlock (es)"), ("uBOLite.chromium", "uBO Lite")]
+            [("manual", "Demo"), ("Sponsor Block_", "SponsorBlock"), ("uBOLite.chromium", "uBO Lite")]
         );
         let manual = &scan.extensions[0];
         assert_eq!(manual.version, "1.2.3");
@@ -747,18 +770,28 @@ mod tests {
         assert_eq!(scan.extensions[2].page.as_deref(), Some("popup.html"));
         assert!(scan.extensions[2].path.ends_with("uBOLite"));
 
-        // Archivos apartados; el roto se queda y se informa.
-        assert!(dir.join(".archivos/uBOLite.chromium.zip").is_file());
+        // Archives moved away; the broken one stays and is reported.
+        assert!(dir.join(".archives/uBOLite.chromium.zip").is_file());
         assert!(!dir.join("uBOLite.chromium.zip").exists());
-        assert!(dir.join("roto.crx").is_file());
+        assert!(dir.join("broken.crx").is_file());
         assert_eq!(scan.problems.len(), 2, "{:?}", scan.problems);
-        assert!(scan.problems.iter().any(|p| p.contains("vacia")));
-        assert!(scan.problems.iter().any(|p| p.contains("roto.crx")));
+        assert!(scan.problems.iter().any(|p| p.contains("empty")));
+        assert!(scan.problems.iter().any(|p| p.contains("broken.crx")));
 
-        // Un segundo escaneo no duplica ni vuelve a descomprimir.
+        // A second scan neither duplicates nor unpacks again.
         let again = super::scan(&dir);
         assert_eq!(again.extensions.len(), 3);
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_archive_folder_is_renamed() {
+        let dir = temp_dir("rename");
+        fs::create_dir_all(dir.join(".archivos")).unwrap();
+        fs::write(dir.join(".archivos/old.zip"), b"x").unwrap();
+        let _ = scan(&dir);
+        assert!(dir.join(".archives/old.zip").is_file() && !dir.join(".archivos").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -782,11 +815,11 @@ mod tests {
     #[test]
     fn zip_slip_is_rejected() {
         let dir = temp_dir("slip");
-        fs::write(dir.join("malo.zip"), zip_bytes(&[("../../fuera.txt", "x"), ("manifest.json", MANIFEST)])).unwrap();
+        fs::write(dir.join("evil.zip"), zip_bytes(&[("../../outside.txt", "x"), ("manifest.json", MANIFEST)])).unwrap();
         let scan = scan(&dir);
         assert!(scan.extensions.is_empty());
-        assert!(scan.problems[0].contains("ruta no permitida"), "{:?}", scan.problems);
-        assert!(!dir.parent().unwrap().join("fuera.txt").exists());
+        assert!(scan.problems[0].contains("../../outside.txt"), "{:?}", scan.problems);
+        assert!(!dir.parent().unwrap().join("outside.txt").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -808,7 +841,7 @@ mod tests {
         fs::create_dir_all(dir.join("ext/js")).unwrap();
         fs::write(
             dir.join("ext/manifest.json"),
-            r#"{"manifest_version":3,"name":"Lector","version":"1","permissions":["storage","tabs"],
+            r#"{"manifest_version":3,"name":"Reader","version":"1","permissions":["storage","tabs"],
                 "host_permissions":["https://*.youtube.com/*"],"content_scripts":[{"matches":["<all_urls>"],"js":["js/a.js"]}]}"#,
         )
         .unwrap();
@@ -818,11 +851,11 @@ mod tests {
         assert_eq!(ext.fingerprint.len(), 64);
         assert_eq!(ext.permissions, ["<all_urls>", "https://*.youtube.com/*", "storage", "tabs"]);
         assert!(ext.all_sites);
-        // Misma carpeta → misma huella; un byte distinto → otra huella.
+        // Same folder → same fingerprint; one different byte → another fingerprint.
         assert_eq!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
         fs::write(dir.join("ext/js/a.js"), "console.log(2)").unwrap();
         assert_ne!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
-        // Mover un archivo de sitio también cambia la huella.
+        // Moving a file elsewhere also changes the fingerprint.
         fs::write(dir.join("ext/js/a.js"), "console.log(1)").unwrap();
         fs::rename(dir.join("ext/js/a.js"), dir.join("ext/a.js")).unwrap();
         assert_ne!(fingerprint(&dir.join("ext")).unwrap(), ext.fingerprint);
@@ -832,13 +865,13 @@ mod tests {
     #[test]
     fn zip_bombs_are_rejected() {
         let dir = temp_dir("bomb");
-        // 300 MB de ceros comprimen a casi nada.
+        // 300 MB of zeros compress to almost nothing.
         let mut buf = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
             zip.start_file("manifest.json", zip::write::SimpleFileOptions::default()).unwrap();
             zip.write_all(MANIFEST.as_bytes()).unwrap();
-            zip.start_file("relleno.bin", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file("padding.bin", zip::write::SimpleFileOptions::default()).unwrap();
             let chunk = vec![0u8; 1024 * 1024];
             for _ in 0..300 {
                 zip.write_all(&chunk).unwrap();
@@ -846,11 +879,11 @@ mod tests {
             zip.finish().unwrap();
         }
         let bytes = buf.into_inner();
-        assert!(bytes.len() < 2 * 1024 * 1024, "el ZIP comprimido es pequeño ({})", bytes.len());
-        fs::write(dir.join("bomba.zip"), bytes).unwrap();
+        assert!(bytes.len() < 2 * 1024 * 1024, "the compressed ZIP is small ({})", bytes.len());
+        fs::write(dir.join("bomb.zip"), bytes).unwrap();
         let scan = scan(&dir);
         assert!(scan.extensions.is_empty());
-        assert!(scan.problems.iter().any(|p| p.contains("supera")), "{:?}", scan.problems);
+        assert!(scan.problems.iter().any(|p| p.contains("256")), "{:?}", scan.problems);
         fs::remove_dir_all(&dir).unwrap();
     }
 

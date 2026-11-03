@@ -1,29 +1,29 @@
 ﻿<#
 .SYNOPSIS
-    Mide memoria privada, working set y CPU de un árbol de procesos.
+    Measures private memory, working set and CPU of a process tree.
 
 .DESCRIPTION
-    Suma el proceso raíz y todos sus descendientes, recalculando el árbol en
-    cada muestra (WebView2 crea y cierra procesos sobre la marcha).
+    Adds up the root process and all its descendants, working the tree out
+    again on every sample (WebView2 creates and closes processes on the fly).
 
-    - yt-mini-player: incluye todos los msedgewebview2.exe que cuelgan de él.
-    - Un navegador (msedge, chrome): incluye todos sus procesos. Para comparar
-      en igualdad de condiciones, ciérralo del todo y ábrelo con una sola
-      pestaña del mismo video.
+    - yt-mini-player: includes every msedgewebview2.exe below it.
+    - A browser (msedge, chrome): includes all its processes. For a fair
+      comparison, close it completely and open it with a single tab of the
+      same video.
 
-    La métrica principal es la memoria privada (Private Bytes). La suma de
-    working sets cuenta varias veces las páginas compartidas entre procesos,
-    así que sobreestima el consumo real; se muestra solo como referencia.
+    The main metric is private memory (Private Bytes). The sum of working
+    sets counts pages shared between processes several times, so it
+    overestimates the real use; it is shown only for reference.
 
-    Compatible con Windows PowerShell 5.1 y PowerShell 7.
+    Works with Windows PowerShell 5.1 and PowerShell 7.
 
 .EXAMPLE
     .\tools\measure.ps1
-    Mide yt-mini-player durante 5 minutos, una muestra cada 5 segundos.
+    Measures yt-mini-player for 5 minutes, one sample every 5 seconds.
 
 .EXAMPLE
     .\tools\measure.ps1 -Name msedge -Seconds 600 -Csv edge.csv
-    Mide Edge durante 10 minutos y guarda las muestras en edge.csv.
+    Measures Edge for 10 minutes and saves the samples to edge.csv.
 #>
 [CmdletBinding()]
 param(
@@ -35,9 +35,9 @@ param(
 
 Set-StrictMode -Version 2.0
 
-# Devuelve los PID del árbol: todo proceso llamado $RootName más sus
-# descendientes. $Processes son objetos con ProcessId, ParentProcessId y Name
-# (como los de Win32_Process).
+# Returns the tree's PIDs: every process called $RootName plus its
+# descendants. $Processes are objects with ProcessId, ParentProcessId and
+# Name (like Win32_Process's).
 function Get-TreeIds {
     param([object[]]$Processes, [string]$RootName)
 
@@ -59,7 +59,7 @@ function Get-TreeIds {
     }
     while ($queue.Count -gt 0) {
         $id = $queue.Dequeue()
-        if (-not $seen.Add($id)) { continue }  # también corta ciclos por PID reutilizado
+        if (-not $seen.Add($id)) { continue }  # also breaks cycles from reused PIDs
         if ($children.ContainsKey($id)) {
             foreach ($child in $children[$id]) { $queue.Enqueue($child) }
         }
@@ -67,9 +67,9 @@ function Get-TreeIds {
     return ,([int[]]@($seen))
 }
 
-# Toma una muestra de los PID dados. $PrevCpu (PID → segundos de CPU) viene
-# de la muestra anterior; la CPU solo se calcula para procesos presentes en
-# ambas, así un proceso recién creado no produce un pico falso.
+# Takes a sample of the given PIDs. $PrevCpu (PID → CPU seconds) comes from
+# the previous sample; CPU is only worked out for processes present in both,
+# so a freshly created process does not produce a false spike.
 function Get-TreeSample {
     param([int[]]$Ids, [hashtable]$PrevCpu, [double]$ElapsedSeconds, [int]$Cores)
 
@@ -109,8 +109,8 @@ function Get-TreeSample {
 }
 
 function Get-HardwareSummary {
-    $cpu = 'desconocida'
-    $gpu = 'desconocida'
+    $cpu = 'unknown'
+    $gpu = 'unknown'
     try { $cpu = (Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1).Name.Trim() } catch { }
     try { $gpu = (@(Get-CimInstance -ClassName Win32_VideoController | ForEach-Object { $_.Name }) -join ' + ') } catch { }
     "CPU: $cpu`nGPU: $gpu"
@@ -122,13 +122,13 @@ function Invoke-Measure {
 
     $ids = Get-TreeIds -Processes @(Get-CimInstance -ClassName Win32_Process) -RootName $Name
     if ($ids.Count -eq 0) {
-        Write-Error "No se encontró '$Name' en ejecución."
+        Write-Error "'$Name' is not running."
         exit 1
     }
 
     Write-Host (Get-HardwareSummary)
-    Write-Host ("Midiendo '{0}' durante {1} s (muestra cada {2} s, {3} núcleos lógicos)`n" -f $Name, $Seconds, $Interval, $cores)
-    Write-Host ('{0,8}  {1,5}  {2,12}  {3,12}  {4,7}' -f 'Seg.', 'Proc.', 'Privada MB', 'WS MB', 'CPU %')
+    Write-Host ("Measuring '{0}' for {1} s (a sample every {2} s, {3} logical cores)`n" -f $Name, $Seconds, $Interval, $cores)
+    Write-Host ('{0,8}  {1,5}  {2,12}  {3,12}  {4,7}' -f 'Sec.', 'Proc.', 'Private MB', 'WS MB', 'CPU %')
 
     $baseline = Get-TreeSample -Ids $ids -PrevCpu @{} -ElapsedSeconds 0 -Cores $cores
     $prevCpu = $baseline.CpuTimes
@@ -139,43 +139,43 @@ function Invoke-Measure {
         Start-Sleep -Seconds $Interval
         $ids = Get-TreeIds -Processes @(Get-CimInstance -ClassName Win32_Process) -RootName $Name
         if ($ids.Count -eq 0) {
-            Write-Warning "'$Name' terminó; se detiene la medición."
+            Write-Warning "'$Name' ended; stopping the measurement."
             break
         }
-        # El tiempo se toma justo antes de leer los contadores: si se tomara
-        # antes de enumerar procesos (que puede tardar), la CPU se inflaría.
+        # The time is taken right before reading the counters: taken before
+        # listing the processes (which can be slow), CPU would be inflated.
         $now = $clock.Elapsed.TotalSeconds
         $s = Get-TreeSample -Ids $ids -PrevCpu $prevCpu -ElapsedSeconds ($now - $last) -Cores $cores
         $prevCpu = $s.CpuTimes
         $last = $now
 
         $row = [pscustomobject]@{
-            Segundos   = [Math]::Round($now)
-            Procesos   = $s.Processes
-            PrivadaMB  = $s.PrivateMB
+            Seconds    = [Math]::Round($now)
+            Processes  = $s.Processes
+            PrivateMB  = $s.PrivateMB
             WorkingMB  = $s.WorkingMB
             CpuPercent = $s.CpuPercent
         }
         $rows.Add($row)
-        Write-Host ('{0,8}  {1,5}  {2,12:N1}  {3,12:N1}  {4,7:N2}' -f $row.Segundos, $row.Procesos, $row.PrivadaMB, $row.WorkingMB, $row.CpuPercent)
+        Write-Host ('{0,8}  {1,5}  {2,12:N1}  {3,12:N1}  {4,7:N2}' -f $row.Seconds, $row.Processes, $row.PrivateMB, $row.WorkingMB, $row.CpuPercent)
     }
 
     if ($rows.Count -eq 0) { return }
 
-    $priv = $rows | Measure-Object -Property PrivadaMB -Average -Maximum
+    $priv = $rows | Measure-Object -Property PrivateMB -Average -Maximum
     $ws = $rows | Measure-Object -Property WorkingMB -Average -Maximum
     $cpu = $rows | Measure-Object -Property CpuPercent -Average -Maximum
 
-    Write-Host "`nResumen ($($rows.Count) muestras)"
-    Write-Host ('  Memoria privada: promedio {0:N1} MB, máximo {1:N1} MB' -f $priv.Average, $priv.Maximum)
-    Write-Host ('  Working set:     promedio {0:N1} MB, máximo {1:N1} MB (sobreestima)' -f $ws.Average, $ws.Maximum)
-    Write-Host ('  CPU:             promedio {0:N2} %, máximo {1:N2} %' -f $cpu.Average, $cpu.Maximum)
+    Write-Host "`nSummary ($($rows.Count) samples)"
+    Write-Host ('  Private memory: average {0:N1} MB, maximum {1:N1} MB' -f $priv.Average, $priv.Maximum)
+    Write-Host ('  Working set:    average {0:N1} MB, maximum {1:N1} MB (overestimates)' -f $ws.Average, $ws.Maximum)
+    Write-Host ('  CPU:            average {0:N2} %, maximum {1:N2} %' -f $cpu.Average, $cpu.Maximum)
 
     if ($Csv) {
         $rows | Export-Csv -Path $Csv -NoTypeInformation -Encoding UTF8
-        Write-Host "`nMuestras guardadas en $Csv"
+        Write-Host "`nSamples saved to $Csv"
     }
 }
 
-# Al cargar el script con '. .\measure.ps1' solo se definen las funciones.
+# Loading the script with '. .\measure.ps1' only defines the functions.
 if ($MyInvocation.InvocationName -ne '.') { Invoke-Measure }

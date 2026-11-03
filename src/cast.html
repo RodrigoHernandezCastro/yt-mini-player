@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>YT Mini Player</title>
+</head>
+<body>
+<script>
+// Sends the host's window to each guest (Watch together, "Share my
+// window"). It is never shown: the app (cast.rs) hands it the window's
+// pictures (JPEG, as the page is drawn) and sound (48 kHz stereo), and
+// it turns them into WebRTC tracks, one connection per guest. The
+// connection's offer and answer travel sealed through the room; the
+// pictures and sound then go straight to each guest, encrypted (DTLS-SRTP).
+//
+// From the app (window.chrome.webview messages):
+//   "f<base64 JPEG>"   a picture        "a<base64 s16le>"   20 ms of sound
+//   {"t":"peer","id","ice","bitrate"}   make a connection for a guest
+//   {"t":"answer","id","sdp"}           its answer
+//   {"t":"close","id"}                  end it
+//   {"t":"bitrate","bitrate"}           upload per guest
+//   {"t":"revoked","id"} / {"t":"busy","id","by"}   tell a guest's page
+// To the app (window.ipc):
+//   cast:ready, cast:caps:{audio}, cast:offer:<id>:<sdp>,
+//   cast:state:<id>:<connectionState>, cast:input:<id>:<json>,
+//   cast:stats:<json> (every 10 s, for the app's diary)
+(() => {
+  'use strict';
+  const post = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* outside the app */ } };
+
+  const RATE = 48000;
+  const peers = new Map();
+  let videoTrack = null;
+  let audioTrack = null;
+  let videoWriter = null;
+  let audioWriter = null;
+  let canvas = null;
+  let lastFrame = null;
+  let decoding = false;
+  let pending = null;
+  let audioTs = 0;
+  // The newest picture while nobody is connected (decoded when someone is).
+  let idle = null;
+  // For the diary: what came from the app and what went to the tracks.
+  const counts = { in: 0, out: 0, decodeMs: 0, sound: 0 };
+
+  // --- Tracks fed by the app ---------------------------------------------------
+  function setup() {
+    const caps = { generator: typeof MediaStreamTrackGenerator === 'function', audio: false };
+    if (caps.generator) {
+      const video = new MediaStreamTrackGenerator({ kind: 'video' });
+      try { video.contentHint = 'motion'; } catch (_) { /* older engine */ }
+      videoTrack = video;
+      videoWriter = video.writable.getWriter();
+      if (typeof AudioData === 'function') {
+        try {
+          const audio = new MediaStreamTrackGenerator({ kind: 'audio' });
+          audioTrack = audio;
+          audioWriter = audio.writable.getWriter();
+          caps.audio = true;
+        } catch (_) { /* pictures only */ }
+      }
+    } else {
+      // Without track generators: a canvas (no sound).
+      canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      videoTrack = canvas.captureStream(30).getVideoTracks()[0];
+    }
+    post('cast:caps:' + JSON.stringify(caps));
+  }
+
+  const fromBase64 = typeof Uint8Array.fromBase64 === 'function'
+    ? (text) => Uint8Array.fromBase64(text)
+    : (text) => {
+      const binary = atob(text);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    };
+
+  const now = () => Math.round(performance.now() * 1000);
+
+  async function decode(text) {
+    const bytes = fromBase64(text);
+    if (typeof ImageDecoder === 'function') {
+      const decoder = new ImageDecoder({ data: bytes, type: 'image/jpeg' });
+      try {
+        const { image } = await decoder.decode();
+        const frame = new VideoFrame(image, { timestamp: now() });
+        image.close();
+        return frame;
+      } finally {
+        decoder.close();
+      }
+    }
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    try { return new VideoFrame(bitmap, { timestamp: now() }); } finally { bitmap.close(); }
+  }
+
+  function write(frame) {
+    if (videoWriter) {
+      // The track takes the frame (and closes it).
+      videoWriter.write(frame).catch(() => {});
+      return;
+    }
+    if (canvas) {
+      if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+        canvas.width = frame.displayWidth;
+        canvas.height = frame.displayHeight;
+      }
+      canvas.getContext('2d').drawImage(frame, 0, 0);
+    }
+    frame.close();
+  }
+
+  // One picture at a time; if more arrive meanwhile, only the newest counts.
+  // With nobody connected yet, none is decoded: only the newest is kept.
+  async function onPicture(text, counted) {
+    if (!counted) counts.in++;
+    if (!peers.size) {
+      idle = text;
+      return;
+    }
+    idle = null;
+    if (decoding) {
+      pending = text;
+      return;
+    }
+    decoding = true;
+    let next = text;
+    while (next) {
+      pending = null;
+      try {
+        const started = performance.now();
+        const frame = await decode(next);
+        counts.decodeMs += performance.now() - started;
+        counts.out++;
+        if (lastFrame) lastFrame.close();
+        lastFrame = frame.clone();
+        write(frame);
+      } catch (_) { /* a damaged picture: the next one will do */ }
+      next = pending;
+    }
+    decoding = false;
+  }
+
+  // A still page draws nothing new: someone who just connected gets the
+  // last picture again (and with it, the first keyframe).
+  function repeatLast() {
+    if (idle) onPicture(idle, true);
+    else if (lastFrame) write(new VideoFrame(lastFrame, { timestamp: now() }));
+  }
+
+  function onSound(text) {
+    counts.sound++;
+    if (!audioWriter) return;
+    const bytes = fromBase64(text);
+    const frames = bytes.length / 4;
+    if (!frames || !Number.isInteger(frames)) return;
+    const t = now();
+    // After a gap (or drift), the clock starts again from now.
+    if (Math.abs(t - audioTs) > 200000) audioTs = t;
+    try {
+      const data = new AudioData({
+        format: 's16', sampleRate: RATE, numberOfChannels: 2, numberOfFrames: frames,
+        timestamp: Math.round(audioTs), data: bytes,
+      });
+      audioWriter.write(data).catch(() => {});
+    } catch (_) { /* skipped */ }
+    audioTs += frames / RATE * 1e6;
+  }
+
+  // --- Connections -------------------------------------------------------------
+
+  // Few codecs keep the offer small (it travels sealed through the relay):
+  // H.264 first (graphics cards encode it), VP8 otherwise.
+  function preferCodecs(transceiver, kind) {
+    if (typeof transceiver.setCodecPreferences !== 'function' || !window.RTCRtpReceiver || !RTCRtpReceiver.getCapabilities) return;
+    const receive = (RTCRtpReceiver.getCapabilities(kind) || {}).codecs || [];
+    const send = ((RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities(kind)) || {}).codecs || [];
+    const sendable = (c) => send.some((s) => s.mimeType === c.mimeType && (s.sdpFmtpLine || '') === (c.sdpFmtpLine || ''));
+    let list;
+    if (kind === 'video') {
+      const h264 = receive.filter((c) => c.mimeType === 'video/H264' && sendable(c)
+        && /packetization-mode=1/.test(c.sdpFmtpLine || '') && /profile-level-id=42e01f/.test(c.sdpFmtpLine || ''));
+      const vp8 = receive.filter((c) => c.mimeType === 'video/VP8');
+      const rtx = receive.filter((c) => c.mimeType === 'video/rtx');
+      list = [...h264.slice(0, 1), ...vp8, ...rtx];
+    } else {
+      list = receive.filter((c) => c.mimeType === 'audio/opus');
+    }
+    if (!list.some((c) => c.mimeType !== 'video/rtx')) return;
+    try { transceiver.setCodecPreferences(list); } catch (_) { /* the default list then */ }
+  }
+
+  // Everything in one description: no candidates trickling afterwards.
+  function gathered(pc, ms) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        pc.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      };
+      const check = () => { if (pc.iceGatheringState === 'complete') done(); };
+      const timer = setTimeout(done, ms);
+      pc.addEventListener('icegatheringstatechange', check);
+    });
+  }
+
+  // Stereo music, not mono voice.
+  function stereo(sdp) {
+    return sdp.replace(/a=fmtp:(\d+) ([^\r\n]*)/g, (line, pt, params) => {
+      if (!new RegExp('a=rtpmap:' + pt + ' opus/48000', 'i').test(sdp)) return line;
+      const extra = ['stereo=1', 'sprop-stereo=1', 'maxaveragebitrate=128000']
+        .filter((p) => !params.includes(p.split('=')[0] + '='));
+      return 'a=fmtp:' + pt + ' ' + params + (extra.length ? ';' + extra.join(';') : '');
+    });
+  }
+
+  // The video starts at a good quality instead of climbing from a few
+  // hundred kbps for the first seconds (Chrome's own codec parameters, set
+  // on the guest's answer: they apply to what this side sends).
+  function videoBitrates(sdp, maxBps) {
+    const max = Math.max(300, Math.round((Number.isFinite(maxBps) && maxBps > 0 ? maxBps : 2500000) / 1000));
+    // Not more than 1.5 Mbit/s to begin with: a slower upload is found out
+    // within a second or two either way.
+    const start = Math.min(1500, Math.round(max * 0.6));
+    const min = Math.min(500, start);
+    const extra = 'x-google-start-bitrate=' + start + ';x-google-min-bitrate=' + min;
+    const lines = sdp.split('\r\n');
+    const video = new Set();
+    for (const line of lines) {
+      const m = /^a=rtpmap:(\d+) (H264|VP8|VP9|AV1)\/90000/i.exec(line);
+      if (m) video.add(m[1]);
+    }
+    const withFmtp = new Set();
+    const out = lines.map((line) => {
+      const m = /^a=fmtp:(\d+) (.*)$/.exec(line);
+      if (!m || !video.has(m[1]) || m[2].includes('x-google-start-bitrate')) return line;
+      withFmtp.add(m[1]);
+      return line + ';' + extra;
+    });
+    // Codecs without parameters (VP8) get a line of their own.
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = /^a=rtpmap:(\d+) /.exec(out[i]);
+      if (m && video.has(m[1]) && !withFmtp.has(m[1])) out.splice(i + 1, 0, 'a=fmtp:' + m[1] + ' ' + extra);
+    }
+    return out.join('\r\n');
+  }
+
+  function videoSender(entry) {
+    return entry.pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  }
+
+  async function setBitrate(entry, bitrate) {
+    const sender = videoSender(entry);
+    if (!sender || !Number.isFinite(bitrate)) return;
+    entry.bitrate = bitrate;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = bitrate;
+      params.encodings[0].maxFramerate = 30;
+      await sender.setParameters(params);
+    } catch (_) { /* kept as it was */ }
+  }
+
+  function tell(entry, message) {
+    if (entry && entry.dc && entry.dc.readyState === 'open') {
+      try { entry.dc.send(JSON.stringify(message)); } catch (_) { /* closing */ }
+    }
+  }
+
+  async function makePeer(id, ice, bitrate) {
+    closePeer(id);
+    const pc = new RTCPeerConnection({ iceServers: Array.isArray(ice) ? ice : [], bundlePolicy: 'max-bundle' });
+    const entry = { id, pc, dc: null, bitrate: bitrate || 2500000, last: null };
+    peers.set(id, entry);
+    try {
+      const stream = new MediaStream([videoTrack, audioTrack].filter(Boolean));
+      const video = pc.addTransceiver(videoTrack, {
+        direction: 'sendonly', streams: [stream],
+        sendEncodings: [{ maxBitrate: bitrate || 2500000, maxFramerate: 30 }],
+      });
+      preferCodecs(video, 'video');
+      if (audioTrack) {
+        const audio = pc.addTransceiver(audioTrack, { direction: 'sendonly', streams: [stream], sendEncodings: [{ maxBitrate: 128000 }] });
+        preferCodecs(audio, 'audio');
+      }
+      // The guest's mouse and keyboard, if the host lets them.
+      const dc = pc.createDataChannel('input', { ordered: true });
+      entry.dc = dc;
+      dc.onmessage = (e) => {
+        if (peers.get(id) === entry && typeof e.data === 'string' && e.data.length <= 512) post('cast:input:' + id + ':' + e.data);
+      };
+      pc.onconnectionstatechange = () => {
+        if (peers.get(id) !== entry) return;
+        post('cast:state:' + id + ':' + pc.connectionState);
+        if (pc.connectionState === 'connected') repeatLast();
+      };
+      await pc.setLocalDescription(await pc.createOffer());
+      await gathered(pc, 3000);
+      if (peers.get(id) !== entry) return;
+      post('cast:offer:' + id + ':' + pc.localDescription.sdp);
+    } catch (_) {
+      if (peers.get(id) === entry) post('cast:state:' + id + ':failed');
+    }
+  }
+
+  async function onAnswer(id, sdp) {
+    const entry = peers.get(id);
+    if (!entry || entry.pc.signalingState !== 'have-local-offer') return;
+    try {
+      await entry.pc.setRemoteDescription({ type: 'answer', sdp: videoBitrates(stereo(String(sdp)), entry.bitrate) });
+    } catch (_) {
+      post('cast:state:' + id + ':failed');
+    }
+  }
+
+  function closePeer(id) {
+    const entry = peers.get(id);
+    if (!entry) return;
+    peers.delete(id);
+    try { entry.pc.close(); } catch (_) { /* closed */ }
+  }
+
+  // --- Numbers for the diary ------------------------------------------------------
+  // Every 10 s: pictures in and out of this page, and per connection what
+  // the guest is sent (frames per second, size, codec and encoder, what
+  // limits it, round trip, sound). No addresses: only the kind of route.
+  const STATS_EVERY = 10000;
+  let statsAt = performance.now();
+
+  async function peerStats(entry, seconds) {
+    const report = await entry.pc.getStats();
+    const out = { id: entry.id, state: entry.pc.connectionState };
+    let videoBytes = 0;
+    let audioBytes = 0;
+    let videoCodec = '';
+    let pair = null;
+    const byId = new Map();
+    report.forEach((s) => byId.set(s.id, s));
+    report.forEach((s) => {
+      if (s.type === 'outbound-rtp' && s.kind === 'video') {
+        if (s.framesPerSecond !== undefined) out.fps = s.framesPerSecond;
+        if (s.frameWidth) { out.w = s.frameWidth; out.h = s.frameHeight; }
+        if (s.encoderImplementation) out.enc = s.encoderImplementation;
+        if (s.qualityLimitationReason) out.limit = s.qualityLimitationReason;
+        videoBytes += s.bytesSent || 0;
+        videoCodec = s.codecId || videoCodec;
+      } else if (s.type === 'outbound-rtp' && s.kind === 'audio') {
+        audioBytes += s.bytesSent || 0;
+      } else if (s.type === 'media-source' && s.kind === 'audio' && s.audioLevel !== undefined) {
+        out.level = s.audioLevel;
+      } else if (s.type === 'remote-inbound-rtp' && s.kind === 'video' && s.fractionLost !== undefined) {
+        out.lost = s.fractionLost * 100;
+      } else if (s.type === 'transport' && s.selectedCandidatePairId) {
+        pair = s.selectedCandidatePairId;
+      }
+    });
+    const codec = byId.get(videoCodec);
+    if (codec && codec.mimeType) out.codec = codec.mimeType.split('/')[1];
+    const chosen = pair && byId.get(pair);
+    if (chosen) {
+      if (chosen.currentRoundTripTime !== undefined) out.rtt = chosen.currentRoundTripTime * 1000;
+      const local = byId.get(chosen.localCandidateId);
+      const remote = byId.get(chosen.remoteCandidateId);
+      if (local && remote) out.route = local.candidateType + '-' + remote.candidateType;
+    }
+    if (entry.last && seconds > 0) {
+      out.kbps = Math.max(0, (videoBytes - entry.last.video) * 8 / 1000 / seconds);
+      out.audioKbps = Math.max(0, (audioBytes - entry.last.audio) * 8 / 1000 / seconds);
+    }
+    entry.last = { video: videoBytes, audio: audioBytes };
+    return out;
+  }
+
+  async function stats() {
+    const at = performance.now();
+    const seconds = (at - statsAt) / 1000;
+    statsAt = at;
+    if (seconds <= 0) return null;
+    const page = {
+      in: counts.in / seconds, out: counts.out / seconds,
+      decodeMs: counts.out ? counts.decodeMs / counts.out : 0, sound: counts.sound / seconds, peers: [],
+    };
+    counts.in = 0; counts.out = 0; counts.decodeMs = 0; counts.sound = 0;
+    for (const entry of peers.values()) {
+      try { page.peers.push(await peerStats(entry, seconds)); } catch (_) { /* closing */ }
+    }
+    const json = JSON.stringify(page);
+    post('cast:stats:' + json);
+    return page;
+  }
+  setInterval(stats, STATS_EVERY);
+  // The tests ask for them at once.
+  Object.defineProperty(window, '__ytmpCastStats', { value: stats });
+
+  function onOrder(message) {
+    const id = typeof message.id === 'string' ? message.id : '';
+    switch (message.t) {
+      case 'peer': makePeer(id, message.ice, Number(message.bitrate)); break;
+      case 'answer': onAnswer(id, message.sdp); break;
+      case 'close': closePeer(id); break;
+      case 'bitrate': for (const entry of peers.values()) setBitrate(entry, Number(message.bitrate)); break;
+      case 'revoked': tell(peers.get(id), { t: 'revoked' }); break;
+      case 'busy': tell(peers.get(id), { t: 'busy', by: String(message.by || '') }); break;
+      default:
+    }
+  }
+
+  function onMessage(data) {
+    if (typeof data !== 'string' || !data) return;
+    const kind = data[0];
+    if (kind === 'f') onPicture(data.slice(1));
+    else if (kind === 'a') onSound(data.slice(1));
+    else if (kind === '{') {
+      try { onOrder(JSON.parse(data)); } catch (_) { /* not for us */ }
+    }
+  }
+
+  const webview = window.chrome && window.chrome.webview;
+  if (webview) webview.addEventListener('message', (e) => onMessage(e.data));
+  // Outside WebView2 (development and tests) the app calls this instead.
+  Object.defineProperty(window, '__ytmpPost', { value: onMessage });
+
+  setup();
+  post('cast:ready');
+})();
+</script>
+</body>
+</html>

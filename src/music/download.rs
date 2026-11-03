@@ -1,5 +1,5 @@
-//! Cola de descargas: varias a la vez (pocas, como pide el Archive), cada
-//! una a un `.part` que se reanuda, con verificación SHA-1 al terminar.
+//! Download queue: several at a time (few, as the Archive asks), each to a
+//! resumable `.part` file, verified with SHA-1 when it finishes.
 
 use std::{
     collections::VecDeque,
@@ -13,23 +13,26 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::net::{Http, NetError};
+use crate::{
+    i18n::Message,
+    net::{Http, NetError},
+};
 
-/// Descargas simultáneas.
+/// Simultaneous downloads.
 pub const WORKERS: usize = 3;
-/// Separación mínima entre dos arranques (no golpear al servidor).
+/// Minimum gap between two starts (do not hammer the server).
 const STAGGER: Duration = Duration::from_millis(400);
-/// Cada cuánto se informa el progreso de una descarga.
+/// How often a download's progress is reported.
 const PROGRESS_EVERY: Duration = Duration::from_millis(300);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Job {
     pub id: u64,
     pub url: String,
-    /// Ruta final deseada (si existe, se usa "Nombre (2).ext").
+    /// Desired final path (if it exists, "Name (2).ext" is used).
     pub dest: PathBuf,
     pub size: u64,
-    /// SHA-1 esperado (hex, minúsculas) o vacío.
+    /// Expected SHA-1 (lowercase hex) or empty.
     pub sha1: String,
 }
 
@@ -38,7 +41,7 @@ pub enum Progress {
     Started(u64),
     Bytes { id: u64, received: u64 },
     Finished { id: u64, path: PathBuf },
-    Failed { id: u64, error: String },
+    Failed { id: u64, error: Message },
     Cancelled(u64),
 }
 
@@ -63,7 +66,7 @@ impl Downloader {
             let shared = shared.clone();
             let http = http.clone();
             let report = report.clone();
-            let _ = thread::Builder::new().name(format!("descarga-{n}")).spawn(move || worker(&shared, &http, &*report));
+            let _ = thread::Builder::new().name(format!("download-{n}")).spawn(move || worker(&shared, &http, &*report));
         }
         Self { shared }
     }
@@ -74,8 +77,8 @@ impl Downloader {
         wake.notify_one();
     }
 
-    /// Cancela una (o todas con `None`). Devuelve las que estaban en espera
-    /// (las que ya corrían avisan solas con `Cancelled`).
+    /// Cancels one (or all with `None`). Returns those that were waiting
+    /// (the running ones report `Cancelled` by themselves).
     pub fn cancel(&self, id: Option<u64>) -> Vec<u64> {
         let (lock, _) = &*self.shared;
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -126,7 +129,7 @@ fn worker(shared: &(Mutex<Queue>, Condvar), http: &Http, report: &dyn Fn(Progres
                     wake.wait_timeout(q, left).unwrap_or_else(|e| e.into_inner()).0
                 };
             }
-            let job = q.waiting.pop_front().expect("hay trabajo");
+            let job = q.waiting.pop_front().expect("there is work");
             let cancel = Arc::new(AtomicBool::new(false));
             q.running.push((job.id, cancel.clone()));
             q.last_start = Some(Instant::now());
@@ -141,12 +144,12 @@ fn worker(shared: &(Mutex<Queue>, Condvar), http: &Http, report: &dyn Fn(Progres
         report(match result {
             Ok(path) => Progress::Finished { id: job.id, path },
             Err(NetError::Cancelled) => Progress::Cancelled(job.id),
-            Err(err) => Progress::Failed { id: job.id, error: err.to_string() },
+            Err(err) => Progress::Failed { id: job.id, error: err.message() },
         });
     }
 }
 
-/// `Nombre.ext` → `Nombre (2).ext` si ya existe.
+/// `Name.ext` → `Name (2).ext` if it already exists.
 pub fn free_name(dest: &Path) -> PathBuf {
     if !dest.exists() {
         return dest.to_path_buf();
@@ -166,11 +169,11 @@ pub fn part_path(dest: &Path) -> PathBuf {
 }
 
 fn run(http: &Http, job: &Job, cancel: &AtomicBool, report: &dyn Fn(Progress)) -> Result<PathBuf, NetError> {
-    let dir = job.dest.parent().ok_or_else(|| NetError::Io("ruta sin carpeta".into()))?;
+    let dir = job.dest.parent().ok_or_else(|| NetError::Io("path without a folder".into()))?;
     fs::create_dir_all(dir).map_err(|e| NetError::Io(e.to_string()))?;
     let part = part_path(&job.dest);
-    // `Instant` no se puede restar sin riesgo (en Windows cuenta desde el
-    // arranque del equipo): "nunca" se representa con None.
+    // `Instant` cannot be subtracted from safely (on Windows it counts from
+    // boot): "never" is represented with None.
     let mut last: Option<Instant> = None;
     let size = http.download(&job.url, &part, cancel, &mut |received| {
         if last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
@@ -188,13 +191,13 @@ fn run(http: &Http, job: &Job, cancel: &AtomicBool, report: &dyn Fn(Progress)) -
     };
     if job.size > 0 && size != job.size {
         let _ = fs::remove_file(&part);
-        return Err(NetError::Invalid(format!("tamaño inesperado ({size} en vez de {})", job.size)));
+        return Err(NetError::Corrupt(format!("unexpected size ({size} instead of {})", job.size)));
     }
     if !job.sha1.is_empty() {
         let actual = super::scan::sha1_file(&part).map_err(|e| NetError::Io(e.to_string()))?;
         if !actual.eq_ignore_ascii_case(&job.sha1) {
             let _ = fs::remove_file(&part);
-            return Err(NetError::Invalid("el archivo llegó dañado (la suma SHA-1 no coincide)".into()));
+            return Err(NetError::Corrupt("the SHA-1 checksum does not match".into()));
         }
     }
     let path = free_name(&job.dest);
@@ -215,11 +218,11 @@ mod tests {
     #[test]
     fn names() {
         let dir = temp_dir("names");
-        let dest = dir.join("01 - Tema.mp3");
+        let dest = dir.join("01 - Song.mp3");
         assert_eq!(free_name(&dest), dest);
         fs::write(&dest, b"x").unwrap();
-        assert_eq!(free_name(&dest), dir.join("01 - Tema (2).mp3"));
-        assert_eq!(part_path(&dest), dir.join("01 - Tema.mp3.part"));
+        assert_eq!(free_name(&dest), dir.join("01 - Song (2).mp3"));
+        assert_eq!(part_path(&dest), dir.join("01 - Song.mp3.part"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -245,17 +248,17 @@ mod tests {
         let job = |id: u64, path: &str, name: &str, sha1: &str| Job {
             id,
             url: format!("{base}{path}"),
-            dest: dir.join("Artista").join("Álbum").join(name),
+            dest: dir.join("Artist").join("Albüm").join(name),
             size: 300_000,
             sha1: sha1.into(),
         };
-        dl.push(job(1, "/a.mp3", "01 - Uno.mp3", &sha));
-        dl.push(job(2, "/b.mp3", "02 - Dos.mp3", "0000000000000000000000000000000000000000"));
-        dl.push(job(3, "/missing.mp3", "03 - Tres.mp3", ""));
-        dl.push(job(4, "/slow.mp3", "04 - Cuatro.mp3", &sha));
-        dl.push(job(5, "/a.mp3", "05 - Cinco.mp3", ""));
+        dl.push(job(1, "/a.mp3", "01 - One.mp3", &sha));
+        dl.push(job(2, "/b.mp3", "02 - Two.mp3", "0000000000000000000000000000000000000000"));
+        dl.push(job(3, "/missing.mp3", "03 - Three.mp3", ""));
+        dl.push(job(4, "/slow.mp3", "04 - Four.mp3", &sha));
+        dl.push(job(5, "/a.mp3", "05 - Five.mp3", ""));
         thread::sleep(Duration::from_millis(100));
-        assert_eq!(dl.cancel(Some(5)), vec![5], "la que espera se quita de la cola");
+        assert_eq!(dl.cancel(Some(5)), vec![5], "the waiting one leaves the queue");
 
         let mut done = std::collections::BTreeMap::new();
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -282,9 +285,9 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(fs::read(&path).unwrap(), good);
-        assert!(matches!(&done[&2], Progress::Failed { error, .. } if error.contains("SHA-1")), "{:?}", done[&2]);
-        assert!(!part_path(&dir.join("Artista/Álbum/02 - Dos.mp3")).exists(), "el dañado no queda");
-        assert!(matches!(&done[&3], Progress::Failed { error, .. } if error.contains("404")));
+        assert!(matches!(&done[&2], Progress::Failed { error, .. } if *error == msg!("net.corrupt")), "{:?}", done[&2]);
+        assert!(!part_path(&dir.join("Artist/Albüm/02 - Two.mp3")).exists(), "the damaged one is not kept");
+        assert!(matches!(&done[&3], Progress::Failed { error, .. } if *error == msg!("net.status", code = 404u16)));
         assert!(matches!(&done[&4], Progress::Cancelled(4)), "{:?}", done.get(&4));
         assert!(!done.contains_key(&5));
         assert!(log.lock().unwrap().iter().all(|s| s.headers.iter().any(|(k, v)| k == "user-agent" && v.contains("YTMiniPlayer"))));

@@ -1,12 +1,12 @@
-//! Cliente HTTP de la app (Internet Archive y Lemon Squeezy).
+//! The app's HTTP client (Internet Archive and Lemon Squeezy).
 //!
-//! - En Windows usa **SChannel**, la pila TLS del sistema: los mismos
-//!   certificados raíz, revocación y políticas que Edge. No se desactiva
-//!   nunca la verificación.
-//! - User-Agent descriptivo (lo piden las normas de uso del Internet Archive).
-//! - Reintentos con espera creciente ante 429/5xx, respetando `Retry-After`.
-//! - Respuestas JSON acotadas en tamaño; descargas a un archivo `.part` que
-//!   se reanuda con `Range` si se corta.
+//! - On Windows it uses **SChannel**, the system's TLS stack: the same root
+//!   certificates, revocation and policies as Edge. Verification is never
+//!   turned off.
+//! - A descriptive User-Agent (the Internet Archive's usage rules ask for it).
+//! - Retries with growing waits on 429/5xx, honouring `Retry-After`.
+//! - Size-bounded JSON responses; downloads to a `.part` file that resumes
+//!   with `Range` if cut off.
 
 use std::{
     fmt,
@@ -25,40 +25,56 @@ pub const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (Windows desktop music player; library downloads of openly licensed audio)"
 );
-/// Ningún JSON que se pide se acerca a esto.
+/// No JSON the app asks for comes near this.
 const MAX_JSON: u64 = 16 * 1024 * 1024;
-/// Un archivo de audio más grande que esto no es una canción.
+/// An audio file bigger than this is not a song.
 pub const MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
 const RETRIES: u32 = 3;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetError {
-    /// Sin conexión, DNS, TLS, tiempo agotado...
+    /// No connection, DNS, TLS, timeout...
     Offline(String),
-    /// Respuesta con error; incluye el cuerpo (acotado) por si trae JSON.
+    /// An error response; includes the (bounded) body in case it has JSON.
     Status(u16, String),
     Cancelled,
-    /// Respuesta inesperada (JSON inválido, tamaño, suma de control).
+    /// An unexpected response (invalid JSON, size).
     Invalid(String),
-    /// Error del disco.
+    /// The file arrived damaged (wrong size or checksum).
+    Corrupt(String),
+    /// A disk error.
     Io(String),
 }
 
+/// For logs (the user sees [`NetError::message`]).
 impl fmt::Display for NetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NetError::Offline(e) => write!(f, "sin conexión ({e})"),
-            NetError::Status(429, _) => write!(f, "el servidor pide esperar un poco (429)"),
-            NetError::Status(code, _) => write!(f, "el servidor respondió {code}"),
-            NetError::Cancelled => write!(f, "cancelado"),
-            NetError::Invalid(e) => write!(f, "respuesta no válida: {e}"),
-            NetError::Io(e) => write!(f, "error de disco: {e}"),
+            NetError::Offline(e) => write!(f, "offline ({e})"),
+            NetError::Status(code, _) => write!(f, "the server answered {code}"),
+            NetError::Cancelled => write!(f, "cancelled"),
+            NetError::Invalid(e) => write!(f, "invalid response: {e}"),
+            NetError::Corrupt(e) => write!(f, "damaged file: {e}"),
+            NetError::Io(e) => write!(f, "disk error: {e}"),
         }
     }
 }
 
 impl NetError {
+    /// What went wrong, for the user, in the language the page shows.
+    pub fn message(&self) -> crate::i18n::Message {
+        match self {
+            NetError::Offline(_) => msg!("net.offline"),
+            NetError::Status(429, _) => msg!("net.busy"),
+            NetError::Status(code, _) => msg!("net.status", code = *code),
+            NetError::Cancelled => msg!("net.cancelled"),
+            NetError::Invalid(_) => msg!("net.invalid"),
+            NetError::Corrupt(_) => msg!("net.corrupt"),
+            NetError::Io(e) => msg!("net.disk", error = e.as_str()),
+        }
+    }
+
     fn retryable(&self) -> bool {
         matches!(self, NetError::Offline(_)) || matches!(self, NetError::Status(code, _) if *code == 429 || *code >= 500)
     }
@@ -68,8 +84,8 @@ pub struct Http {
     agent: ureq::Agent,
 }
 
-/// Espera antes del reintento `attempt` (0, 1, 2...): 1 s, 2 s, 4 s... o lo
-/// que pida el servidor con `Retry-After` (en segundos), con un tope.
+/// Wait before retry `attempt` (0, 1, 2...): 1 s, 2 s, 4 s... or whatever
+/// the server asks for with `Retry-After` (in seconds), up to a cap.
 pub fn backoff(attempt: u32, retry_after: Option<&str>) -> Duration {
     if let Some(secs) = retry_after.and_then(|v| v.trim().parse::<u64>().ok()) {
         return Duration::from_secs(secs).min(MAX_RETRY_AFTER);
@@ -96,7 +112,7 @@ impl Http {
         Ok(Self { agent: builder.build() })
     }
 
-    /// GET que devuelve JSON. Reintenta ante fallos pasajeros.
+    /// A GET that returns JSON. Retries on passing failures.
     pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T, NetError> {
         self.with_retries(|| {
             let response = self.agent.get(url).set("Accept", "application/json").call();
@@ -105,8 +121,8 @@ impl Http {
         })
     }
 
-    /// POST de formulario; devuelve el código y el JSON aunque sea un error
-    /// (Lemon Squeezy explica los errores en el cuerpo).
+    /// A form POST; returns the code and the JSON even for an error (Lemon
+    /// Squeezy explains errors in the body).
     pub fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, serde_json::Value), NetError> {
         let response = self.agent.post(url).set("Accept", "application/json").send_form(form);
         let (status, body) = match response {
@@ -121,8 +137,8 @@ impl Http {
         Ok((status, json))
     }
 
-    /// Descarga `url` a `part`, continuando lo que ya hubiera. Devuelve el
-    /// tamaño final. `progress` recibe los bytes que hay en disco.
+    /// Downloads `url` to `part`, continuing whatever was there. Returns the
+    /// final size. `progress` receives the bytes on disk.
     pub fn download(
         &self,
         url: &str,
@@ -150,7 +166,7 @@ impl Http {
         }
         let response = match request.call() {
             Ok(r) => r,
-            // Ya estaba completo.
+            // It was already complete.
             Err(ureq::Error::Status(416, _)) if have > 0 => return Ok(have),
             Err(ureq::Error::Status(code, r)) => {
                 let body = read_limited(r.into_reader(), 4096).unwrap_or_default();
@@ -158,7 +174,7 @@ impl Http {
             }
             Err(ureq::Error::Transport(t)) => return Err(NetError::Offline(t.to_string())),
         };
-        // 206 = continúa; 200 = el servidor manda todo de nuevo.
+        // 206 = continues; 200 = the server sends everything again.
         let resume = response.status() == 206 && have > 0;
         let mut file = OpenOptions::new()
             .create(true)
@@ -183,7 +199,7 @@ impl Http {
             };
             written += n as u64;
             if written > MAX_DOWNLOAD {
-                return Err(NetError::Invalid("archivo demasiado grande".into()));
+                return Err(NetError::Corrupt("file too large".into()));
             }
             file.write_all(&buffer[..n]).map_err(|e| NetError::Io(e.to_string()))?;
             progress(written);
@@ -212,8 +228,8 @@ impl Http {
     }
 }
 
-/// Cuerpo de la respuesta (acotado). En un 429/503 se guarda `Retry-After`
-/// para que el reintento espere lo que pide el servidor.
+/// The response body (bounded). On a 429/503 `Retry-After` is kept so the
+/// retry waits as long as the server asks.
 fn read_body(response: Result<ureq::Response, ureq::Error>) -> Result<Vec<u8>, NetError> {
     match response {
         Ok(r) => read_limited(r.into_reader(), MAX_JSON),
@@ -232,14 +248,14 @@ fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>, NetError> {
     let mut body = Vec::new();
     reader.take(limit + 1).read_to_end(&mut body).map_err(|e| NetError::Offline(e.to_string()))?;
     if body.len() as u64 > limit {
-        return Err(NetError::Invalid("respuesta demasiado grande".into()));
+        return Err(NetError::Invalid("response too large".into()));
     }
     Ok(body)
 }
 
 #[cfg(test)]
 pub mod testserver {
-    //! Servidor HTTP mínimo para pruebas (solo 127.0.0.1, sin TLS).
+    //! A minimal HTTP server for tests (127.0.0.1 only, no TLS).
     use std::{
         io::{BufRead, BufReader, Read, Write},
         net::TcpListener,
@@ -269,8 +285,8 @@ pub mod testserver {
 
     pub type Handler = dyn Fn(&Seen) -> Reply + Send + Sync;
 
-    /// Arranca el servidor; devuelve la base (`http://127.0.0.1:puerto`) y
-    /// el registro de peticiones.
+    /// Starts the server; returns the base (`http://127.0.0.1:port`) and the
+    /// request log.
     pub fn serve(handler: Arc<Handler>) -> (String, Arc<Mutex<Vec<Seen>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -365,7 +381,7 @@ mod tests {
         let http = Http::new().unwrap();
         let err = http.get_json::<serde_json::Value>(&format!("{base}/x")).unwrap_err();
         assert!(matches!(err, NetError::Status(404, _)), "{err:?}");
-        assert_eq!(log.lock().unwrap().len(), 1, "un 404 no se reintenta");
+        assert_eq!(log.lock().unwrap().len(), 1, "a 404 is not retried");
     }
 
     #[test]
@@ -381,10 +397,10 @@ mod tests {
         let (status, json) = http.post_form(&format!("{base}/v1/licenses/activate"), &[("license_key", "BAD")]).unwrap();
         assert_eq!(status, 404);
         assert_eq!(json["error"], "license_key not found.");
-        let (status, json) = http.post_form(&format!("{base}/v1/licenses/activate"), &[("license_key", "OK"), ("instance_name", "PC de Ana")]).unwrap();
+        let (status, json) = http.post_form(&format!("{base}/v1/licenses/activate"), &[("license_key", "OK"), ("instance_name", "Ana PC")]).unwrap();
         assert_eq!((status, json["activated"].as_bool()), (200, Some(true)));
         let seen = log.lock().unwrap();
-        assert_eq!(seen[1].body, "license_key=OK&instance_name=PC+de+Ana");
+        assert_eq!((seen[1].method.as_str(), seen[1].body.as_str()), ("POST", "license_key=OK&instance_name=Ana+PC"));
         assert!(seen[1].headers.iter().any(|(k, v)| k == "accept" && v == "application/json"));
     }
 
@@ -407,7 +423,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ytmp-net-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let part = dir.join("song.mp3.part");
-        // Primera mitad ya descargada.
+        // The first half already downloaded.
         fs::write(&part, &content[..80_000]).unwrap();
         let http = Http::new().unwrap();
         let cancel = AtomicBool::new(false);
@@ -417,11 +433,12 @@ mod tests {
         assert_eq!(last, 200_000);
         assert_eq!(fs::read(&part).unwrap(), content);
         assert_eq!(log.lock().unwrap()[0].headers.iter().find(|(k, _)| k == "range").unwrap().1, "bytes=80000-");
-        // Completo: 416 → nada que hacer.
+        // Complete: 416 → nothing to do.
         assert_eq!(http.download(&format!("{base}/x"), &part, &cancel, &mut |_| {}).unwrap(), 200_000);
-        // Cancelado antes de empezar.
+        // Cancelled before starting.
         cancel.store(true, Ordering::Relaxed);
-        assert_eq!(http.download(&format!("{base}/x"), &dir.join("otra.part"), &cancel, &mut |_| {}), Err(NetError::Cancelled));
+        assert_eq!(http.download(&format!("{base}/x"), &dir.join("other.part"), &cancel, &mut |_| {}), Err(NetError::Cancelled));
+        assert_eq!(NetError::Status(503, String::new()).message(), msg!("net.status", code = 503u16));
         let _ = fs::remove_dir_all(dir);
     }
 }

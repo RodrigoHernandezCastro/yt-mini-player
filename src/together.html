@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="__YTMP_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="together.window_title"></title>
+<style>
+  /* The palette, deepest to lightest. */
+  :root {
+    --deep-twilight: #03045e;
+    --french-blue: #023e8a;
+    --bright-teal-blue: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise-surf: #00b4d8;
+    --sky-aqua: #48cae4;
+    --frosted-blue: #90e0ef;
+    --frosted-blue-2: #ade8f4;
+    --light-cyan: #caf0f8;
+    /* What each one does: the deep ones are the water, the light ones the
+       text, turquoise is what you can press. */
+    --ground: var(--deep-twilight);
+    --surface: rgba(2, 62, 138, .38);
+    --surface-strong: var(--french-blue);
+    --line: var(--french-blue);
+    --line-strong: var(--bright-teal-blue);
+    --text: var(--light-cyan);
+    --text-2: var(--frosted-blue-2);
+    --text-3: var(--frosted-blue);
+    --dim: rgba(144, 224, 239, .62);
+    --accent: var(--turquoise-surf);
+    --accent-hover: var(--sky-aqua);
+    --link: var(--sky-aqua);
+    --alert: #ff9f8a;
+    --tide: linear-gradient(90deg, var(--bright-teal-blue), var(--blue-green), var(--turquoise-surf), var(--sky-aqua), var(--frosted-blue), var(--frosted-blue-2), var(--light-cyan));
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  :root { --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; min-height: 100%; }
+  html { background: var(--ground); }
+  body {
+    color: var(--text); font: 13px/1.45 var(--body); -webkit-font-smoothing: antialiased;
+    padding: 0 20px 90px; user-select: none; min-height: 100vh;
+    background: radial-gradient(90% 50% at 100% 0%, rgba(0, 119, 182, .3), transparent 70%);
+  }
+  body::before { content: ""; display: block; height: 3px; margin: 0 -20px 18px; background: var(--tide); }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--sky-aqua); outline-offset: 2px; }
+  input:focus-visible { outline: none; }
+  main { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 16px; max-width: 420px; margin: 0 auto; }
+  section { display: flex; flex-direction: column; gap: 14px; }
+
+  header { display: block; }
+  h1 { margin: 0; font: 600 21px/1.2 var(--display); color: var(--light-cyan); }
+  .lede { margin: 3px 0 0; color: var(--text-3); font-size: 13px; }
+  h2 { margin: 0; font: 600 14px/1.3 var(--display); color: var(--frosted-blue-2); }
+  h3 { margin: 4px 0 -6px; color: var(--sky-aqua); font: 600 12px/1.3 var(--body); }
+
+  /* Fields and buttons */
+  .field { display: flex; flex-direction: column; gap: 5px; color: var(--text-3); font-size: 12px; }
+  input[type="text"] {
+    width: 100%; height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--bright-teal-blue);
+    background: rgba(3, 4, 94, .8); color: var(--text); outline: none; user-select: text;
+  }
+  input[type="text"]:focus { border-color: var(--sky-aqua); box-shadow: 0 0 0 3px rgba(72, 202, 228, .18); }
+  input::placeholder { color: var(--dim); }
+  button {
+    height: 36px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--bright-teal-blue); cursor: pointer;
+    background: rgba(2, 62, 138, .45); color: var(--frosted-blue-2); font: 600 13px var(--body);
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap;
+  }
+  button:hover { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  button.primary { background: linear-gradient(90deg, var(--blue-green), var(--turquoise-surf)); color: var(--deep-twilight); border-color: transparent; }
+  button.primary:hover { background: linear-gradient(90deg, var(--turquoise-surf), var(--sky-aqua)); color: var(--deep-twilight); }
+  button.danger { color: var(--alert); border-color: rgba(255, 159, 138, .45); background: none; }
+  button.danger:hover { background: rgba(255, 159, 138, .12); color: var(--alert); }
+  button.danger.armed { background: var(--alert); color: var(--deep-twilight); border-color: transparent; }
+  button:disabled { opacity: .4; cursor: default; }
+  button:disabled:hover { background: rgba(2, 62, 138, .45); color: var(--frosted-blue-2); }
+  button.primary:disabled:hover { background: linear-gradient(90deg, var(--blue-green), var(--turquoise-surf)); color: var(--deep-twilight); }
+  button svg { width: 15px; height: 15px; flex: none; }
+  .link {
+    height: auto; padding: 2px; border: 0; background: none; color: var(--link);
+    font: 12px var(--body);
+  }
+  .link:hover { background: none; color: var(--light-cyan); text-decoration: underline; }
+  .buttons { display: flex; gap: 8px; }
+  .buttons > button { flex: 1; }
+  .hint { margin: 0; color: var(--text-3); opacity: .85; font-size: 12px; }
+  .fine { margin: 0; color: var(--dim); font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
+  .fine svg { flex: none; width: 13px; height: 13px; margin-top: 2px; color: var(--blue-green); }
+  .error { margin: 0; min-height: 1em; color: var(--alert); font-size: 12px; }
+  .error:empty { display: none; }
+
+  /* The two ways in. */
+  .card {
+    display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 14px 16px; border-radius: 14px;
+    background: linear-gradient(160deg, rgba(0, 119, 182, .28), rgba(2, 62, 138, .18));
+    border: 1px solid rgba(0, 150, 199, .45);
+  }
+  .card > button { align-self: flex-start; }
+  .or { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; color: var(--blue-green); font-size: 12px; }
+  .or::before, .or::after { content: ""; height: 1px; background: linear-gradient(90deg, transparent, var(--bright-teal-blue), transparent); }
+
+  .code-row { display: flex; gap: 8px; }
+  .code-input {
+    flex: 1; min-width: 0; font: 600 15px/1 var(--mono) !important; letter-spacing: .12em; text-transform: uppercase;
+    text-align: center; color: var(--light-cyan) !important;
+  }
+
+  .server { display: flex; flex-direction: column; gap: 6px; }
+  .server .card { background: rgba(2, 62, 138, .3); }
+  .server-line { display: flex; align-items: baseline; gap: 6px; color: var(--dim); font-size: 12px; min-width: 0; }
+  .server-line .addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--frosted-blue); min-width: 0; }
+
+  /* The code: the one big thing, on a slice of the palette. The line under
+     it drains until the next code. */
+  .code-card {
+    position: relative; padding: 16px 16px 14px; border-radius: 16px; overflow: hidden;
+    background: linear-gradient(135deg, var(--bright-teal-blue), var(--french-blue) 55%, var(--deep-twilight));
+    box-shadow: 0 0 0 1px rgba(72, 202, 228, .35), 0 14px 34px rgba(0, 119, 182, .25);
+  }
+  .code-card .label { color: var(--frosted-blue-2); font-size: 12px; }
+  .code {
+    display: flex; flex-wrap: wrap; gap: 0 8px; margin: 10px 0 14px;
+    font: 600 30px/1.1 var(--mono); letter-spacing: .04em; color: var(--light-cyan); user-select: text;
+  }
+  .code .sep { color: var(--sky-aqua); }
+  .meter { height: 3px; border-radius: 2px; background: rgba(3, 4, 94, .6); overflow: hidden; }
+  .meter .fill { height: 100%; border-radius: 2px; background: var(--tide); transform-origin: left; }
+  .code-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 8px; color: var(--frosted-blue); font-size: 12px; }
+  .code-foot .left { font-variant-numeric: tabular-nums; }
+  .code-foot .link { color: var(--light-cyan); }
+  .copy { position: absolute; top: 12px; right: 12px; height: 28px; padding: 0 12px; font-size: 12px; background: rgba(3, 4, 94, .45); border-color: rgba(173, 232, 244, .4); }
+  .copy.done { color: var(--deep-twilight); background: var(--sky-aqua); border-color: transparent; }
+
+  /* People: each one a shade of the palette. */
+  .people { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--french-blue); }
+  .people li {
+    display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center;
+    min-height: 48px; padding: 6px 0; border-bottom: 1px solid var(--french-blue);
+  }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font: 600 12px/1 var(--body); color: var(--deep-twilight); background: var(--sky-aqua);
+  }
+  .people li:nth-child(2) .avatar { background: var(--frosted-blue); }
+  .people li:nth-child(3) .avatar { background: var(--blue-green); color: var(--light-cyan); }
+  .people li:nth-child(4) .avatar { background: var(--turquoise-surf); }
+  .people li:nth-child(5) .avatar { background: var(--frosted-blue-2); }
+  .people li:nth-child(6) .avatar { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  .who { min-width: 0; }
+  .who .nm { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--light-cyan); }
+  .who .tags { display: block; color: var(--text-3); opacity: .8; font-size: 12px; }
+  .who .tags .off { color: var(--alert); }
+  .people .remove { height: 28px; padding: 0 12px; font-size: 12px; }
+  .people .empty { display: block; min-height: 0; padding: 10px 0; color: var(--dim); font-size: 12px; }
+
+  /* How the room watches: two choices, the chosen one lit. */
+  .modes { display: grid; gap: 8px; margin: 2px 0; }
+  .mode {
+    height: auto; padding: 10px 12px; border-radius: 12px; justify-content: flex-start; align-items: flex-start; gap: 10px;
+    text-align: left; white-space: normal; background: rgba(3, 4, 94, .45); border: 1px solid rgba(0, 119, 182, .7);
+    color: var(--text-2); font-weight: 400;
+  }
+  .mode:hover { background: rgba(0, 119, 182, .35); color: var(--text); }
+  .mode svg { width: 20px; height: 20px; margin-top: 1px; color: var(--blue-green); }
+  .mode .mode-name { display: block; font-weight: 600; color: var(--light-cyan); }
+  .mode .mode-sub { display: block; margin-top: 2px; font-size: 12px; color: var(--text-3); opacity: .9; }
+  .mode[aria-checked="true"] {
+    background: linear-gradient(135deg, rgba(0, 150, 199, .42), rgba(2, 62, 138, .5));
+    border-color: var(--sky-aqua); box-shadow: 0 0 0 1px var(--sky-aqua) inset;
+  }
+  .mode[aria-checked="true"] svg { color: var(--frosted-blue-2); }
+  .segmented {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 20px;
+    background: rgba(3, 4, 94, .6); box-shadow: inset 0 0 0 1px var(--french-blue);
+  }
+  .segmented button { height: 30px; border: 0; border-radius: 15px; background: none; color: var(--text-3); font-size: 12px; padding: 0 10px; min-width: 0; }
+  .segmented button svg { width: 15px; height: 15px; }
+  .segmented button span { overflow: hidden; text-overflow: ellipsis; }
+  .segmented button:hover { background: rgba(0, 119, 182, .4); color: var(--light-cyan); }
+  .segmented button[aria-checked="true"] { background: linear-gradient(90deg, var(--blue-green), var(--turquoise-surf)); color: var(--deep-twilight); }
+  .mode-status { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--frosted-blue); }
+  .mode-status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+  .mode-status[data-tone="live"] { color: var(--sky-aqua); font-weight: 600; }
+  .mode-status[data-tone="live"] .dot { background: var(--turquoise-surf); box-shadow: 0 0 0 4px rgba(0, 180, 216, .22); animation: pulse 1.6s ease-in-out infinite; }
+  .note {
+    margin: 0; padding: 9px 12px; border-radius: 12px; font-size: 12px; color: var(--text-2);
+    background: rgba(0, 119, 182, .16); border: 1px solid rgba(72, 202, 228, .3);
+  }
+  .note.warn { border-color: rgba(255, 159, 138, .4); background: rgba(255, 159, 138, .08); color: var(--light-cyan); }
+
+  /* The window's sound: why guests may not hear it, and what to do. */
+  .sound { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .sound p { margin: 0; }
+  .sound .sound-pc {
+    height: auto; min-height: 36px; padding: 8px 14px; border-radius: 12px; white-space: normal; text-align: left;
+    justify-content: flex-start; align-items: flex-start; gap: 10px; width: 100%;
+  }
+  .sound .sound-pc svg { width: 18px; height: 18px; margin-top: 1px; }
+  .sound .sound-pc .mode-name { display: block; font-weight: 600; }
+  .sound .sound-pc .mode-sub { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; opacity: .85; }
+
+  /* Per person: may they use the window (or pause and seek)? */
+  .people .actions { display: flex; align-items: center; gap: 6px; }
+  .ctl {
+    width: 30px; height: 30px; padding: 0; border-radius: 50%; background: rgba(3, 4, 94, .5);
+    border-color: var(--bright-teal-blue); color: var(--frosted-blue);
+  }
+  .ctl svg { width: 15px; height: 15px; }
+  .ctl[aria-pressed="true"] { background: linear-gradient(135deg, var(--turquoise-surf), var(--sky-aqua)); color: var(--deep-twilight); border-color: transparent; }
+  .people .allow { height: 28px; padding: 0 12px; font-size: 12px; }
+  .people .deny { width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 14px; }
+  .who .tags .ok { color: var(--sky-aqua); }
+  .who .tags .busy { color: var(--frosted-blue); }
+  .who .tags .ask { color: var(--light-cyan); font-weight: 600; }
+  .who .tags .ask::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; vertical-align: 1px;
+    background: var(--turquoise-surf); animation: pulse 1.2s ease-in-out infinite;
+  }
+  .people li.asking { background: linear-gradient(90deg, rgba(0, 180, 216, .14), transparent 80%); }
+
+
+  .banner {
+    padding: 9px 14px; border-radius: 12px; border: 1px solid rgba(255, 159, 138, .4);
+    background: rgba(255, 159, 138, .08); color: var(--light-cyan); font-size: 12px;
+  }
+
+  /* Guest: what is playing */
+  .now {
+    display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 16px;
+    background: linear-gradient(135deg, rgba(0, 119, 182, .45), rgba(2, 62, 138, .3) 60%, rgba(3, 4, 94, .2));
+    border: 1px solid rgba(0, 150, 199, .5);
+  }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--frosted-blue); }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .status[data-tone="ok"] { color: var(--sky-aqua); }
+  .status[data-tone="ok"] .dot { background: var(--sky-aqua); box-shadow: 0 0 0 4px rgba(72, 202, 228, .2); }
+  .status[data-tone="busy"] .dot { background: var(--turquoise-surf); animation: pulse 1.2s ease-in-out infinite; }
+  .status[data-tone="warn"] { color: var(--alert); }
+  .status[data-tone="warn"] .dot { background: var(--alert); }
+  .now-title { font: 600 16px/1.3 var(--display); color: var(--light-cyan); overflow-wrap: anywhere; }
+  .now-title:empty { display: none; }
+  .now-site { color: var(--frosted-blue); font-size: 12px; }
+  .now-site:empty { display: none; }
+  .now > button { align-self: flex-start; margin-top: 4px; }
+
+  /* Connecting and ended */
+  .center { align-items: center; text-align: center; padding: 36px 6px 10px; }
+  .spinner {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent, var(--blue-green), var(--turquoise-surf), var(--light-cyan));
+    -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%); mask: radial-gradient(circle, transparent 58%, #000 60%);
+    animation: spin 1s linear infinite;
+  }
+  .ended-mark { width: 34px; height: 34px; color: var(--sky-aqua); }
+  .center p { margin: 0; color: var(--text-3); max-width: 300px; }
+  .center button { min-width: 140px; }
+
+  /* Three slow waves along the bottom edge: the palette's water. */
+  .waves { position: fixed; left: 0; right: 0; bottom: 0; height: var(--waves-height, clamp(70px, 26vh, 180px)); pointer-events: none; z-index: 0; overflow: hidden; }
+  .waves svg { position: absolute; left: 0; bottom: 0; width: 200%; height: 100%; }
+  .waves .w1 { fill: var(--french-blue); opacity: .85; animation: drift 46s linear infinite; }
+  .waves .w2 { fill: var(--bright-teal-blue); opacity: .42; animation: drift 33s linear infinite reverse; }
+  .waves .w3 { fill: var(--blue-green); opacity: .34; animation: drift 25s linear infinite; }
+  @keyframes drift { to { transform: translateX(-50%); } }
+  @media (prefers-reduced-motion: reduce) { .waves .w1, .waves .w2, .waves .w3 { animation: none; } }
+
+  /* In this small window the waves stay low, under the content. */
+  .waves { --waves-height: 58px; opacity: .8; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation-duration: 3s; }
+    .status[data-tone="busy"] .dot, .mode-status .dot, .who .tags .ask::before { animation: none; }
+  }
+  @media (max-width: 340px) {
+    body { padding: 0 14px 80px; }
+    body::before { margin: 0 -14px 14px; }
+    .code { font-size: 24px; gap: 0 6px; }
+    .copy { position: static; align-self: flex-start; margin-top: 10px; }
+    .code-card { display: flex; flex-direction: column; }
+    .segmented button svg { display: none; }
+    .people li { grid-template-columns: 30px 1fr; }
+    .people .actions { grid-column: 2; justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 data-i18n="together.title"></h1>
+    <p class="lede" id="lede"></p>
+  </header>
+
+  <!-- Not in a session -->
+  <section id="v-idle" hidden>
+    <label class="field">
+      <span data-i18n="together.your_name"></span>
+      <input type="text" id="name" maxlength="24" autocomplete="off" spellcheck="false" data-i18n-placeholder="together.name_placeholder">
+    </label>
+
+    <div class="card">
+      <h2 data-i18n="together.start_title"></h2>
+      <div class="modes" role="radiogroup" data-i18n-aria-label="together.mode_label">
+        <button type="button" class="mode" role="radio" data-mode="share">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/><path d="M10.5 8.3l4 2.2-4 2.2z" fill="currentColor"/></svg>
+          <span><span class="mode-name" data-i18n="together.mode_share"></span><span class="mode-sub" data-i18n="together.mode_share_sub"></span></span>
+        </button>
+        <button type="button" class="mode" role="radio" data-mode="sync">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10a7.5 7.5 0 0 1 13.4-3.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M19.5 14a7.5 7.5 0 0 1-13.4 3.6L4 15.5"/><path d="M4 20v-4.5h4.5"/></svg>
+          <span><span class="mode-name" data-i18n="together.mode_sync"></span><span class="mode-sub" data-i18n="together.mode_sync_sub"></span></span>
+        </button>
+      </div>
+      <p class="hint" data-i18n="together.start_hint"></p>
+      <button type="button" class="primary" id="start" data-i18n="together.start"></button>
+    </div>
+
+    <div class="or"><span data-i18n="together.or"></span></div>
+
+    <form class="card" id="join-form" autocomplete="off">
+      <h2 data-i18n="together.join_title"></h2>
+      <div class="code-row">
+        <input type="text" class="code-input" id="code" maxlength="20" spellcheck="false" placeholder="XXXX-XXXX-XXXX" data-i18n-aria-label="together.code_label">
+        <button type="submit" class="primary" id="join" data-i18n="together.join"></button>
+      </div>
+      <p class="error" id="code-error" role="alert"></p>
+    </form>
+
+    <div class="server" id="server">
+      <div class="server-line" id="server-line">
+        <span data-i18n="together.server"></span><span class="addr" id="server-addr"></span>
+        <button type="button" class="link" id="server-change" data-i18n="together.change"></button>
+      </div>
+      <form class="card" id="server-form" autocomplete="off" hidden>
+        <h2 data-i18n="together.server"></h2>
+        <p class="hint" data-i18n="together.server_hint"></p>
+        <div class="code-row">
+          <input type="text" id="relay" spellcheck="false" placeholder="wss://ytmp-together.….workers.dev" data-i18n-aria-label="together.server">
+          <button type="submit" id="relay-save" data-i18n="together.save"></button>
+        </div>
+        <p class="error" id="relay-error" role="alert"></p>
+      </form>
+    </div>
+
+    <p class="fine">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg>
+      <span data-i18n="together.privacy"></span>
+    </p>
+  </section>
+
+  <!-- Connecting -->
+  <section id="v-connecting" class="center" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="connecting-text" role="status"></p>
+    <button type="button" id="cancel" data-i18n="common.cancel"></button>
+  </section>
+
+  <!-- Hosting -->
+  <section id="v-host" hidden>
+    <div class="code-card">
+      <div class="label" data-i18n="together.your_code"></div>
+      <div class="code" id="code-text" aria-live="polite"></div>
+      <div class="meter" aria-hidden="true"><div class="fill" id="code-fill"></div></div>
+      <div class="code-foot">
+        <span class="left" id="code-left"></span>
+        <button type="button" class="link" id="new-code" data-i18n="together.new_code" data-i18n-title="together.new_code_hint"></button>
+      </div>
+      <button type="button" class="copy" id="copy">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.6"/><path d="M11 5V3.8A1.3 1.3 0 0 0 9.7 2.5H3.8a1.3 1.3 0 0 0-1.3 1.3v5.9A1.3 1.3 0 0 0 3.8 11H5"/></svg>
+        <span id="copy-label" data-i18n="together.copy"></span>
+      </button>
+    </div>
+    <p class="hint" data-i18n="together.share_hint"></p>
+    <div class="banner" id="host-banner" role="status" hidden></div>
+    <div class="segmented" role="radiogroup" data-i18n-aria-label="together.mode_label">
+      <button type="button" role="radio" data-mode="share" data-i18n-title="together.mode_share_sub">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/></svg>
+        <span data-i18n="together.mode_share_short"></span>
+      </button>
+      <button type="button" role="radio" data-mode="sync" data-i18n-title="together.mode_sync_sub">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10a7.5 7.5 0 0 1 13.4-3.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M19.5 14a7.5 7.5 0 0 1-13.4 3.6L4 15.5"/><path d="M4 20v-4.5h4.5"/></svg>
+        <span data-i18n="together.mode_sync_short"></span>
+      </button>
+    </div>
+    <p class="mode-status" id="mode-status"><span class="dot" aria-hidden="true"></span><span id="mode-status-text" role="status"></span></p>
+    <p class="note warn" id="protected-note" data-i18n="together.protected_page" hidden></p>
+    <div class="note sound" id="sound-box" hidden>
+      <p id="sound-text" role="status"></p>
+      <button type="button" class="sound-pc" id="sound-pc">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/><path d="M10 8.5v3l2.5-1.5z" fill="currentColor"/><path d="M15 8.2a3 3 0 0 1 0 3.6"/></svg>
+        <span><span class="mode-name" data-i18n="together.sound_pc"></span><span class="mode-sub" data-i18n="together.sound_pc_sub"></span></span>
+      </button>
+      <button type="button" class="link" id="sound-app" data-i18n="together.sound_app" hidden></button>
+    </div>
+    <h3 id="host-people-title"></h3>
+    <ul class="people" id="host-people"></ul>
+    <p class="hint" id="control-hint"></p>
+    <button type="button" class="danger" id="end" data-i18n="together.end"></button>
+  </section>
+
+  <!-- Watching as a guest -->
+  <section id="v-guest" hidden>
+    <div class="now">
+      <div class="status" id="status" data-tone="busy"><span class="dot" aria-hidden="true"></span><span id="status-text" role="status"></span></div>
+      <div class="now-title" id="now-title"></div>
+      <div class="now-site" id="now-site"></div>
+      <button type="button" id="open-site" hidden></button>
+      <button type="button" class="primary" id="show-window" data-i18n="together.show_window" hidden></button>
+    </div>
+    <div class="banner" id="guest-banner" role="status" hidden></div>
+    <h3 id="guest-people-title"></h3>
+    <ul class="people" id="guest-people"></ul>
+    <p class="hint" id="control-note"></p>
+    <button type="button" id="ask" hidden></button>
+    <div class="buttons">
+      <button type="button" id="resync" data-i18n="together.resync" data-i18n-title="together.resync_hint"></button>
+      <button type="button" class="danger" id="leave" data-i18n="together.leave"></button>
+    </div>
+    <p class="fine" id="rtt"></p>
+  </section>
+
+  <!-- Over -->
+  <section id="v-ended" class="center" hidden>
+    <svg class="ended-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.2M12 16.2v.3" stroke-linecap="round"/></svg>
+    <h2 data-i18n="together.ended_title"></h2>
+    <p id="ended-text"></p>
+    <button type="button" class="primary" id="dismiss" data-i18n="together.ok"></button>
+  </section>
+</main>
+
+  <div class="waves" aria-hidden="true">
+    <svg class="w1" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 70C100 40 200 40 300 70C400 100 500 100 600 70C700 40 800 40 900 70C1000 100 1100 100 1200 70V120H0Z"/></svg>
+    <svg class="w2" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 82C100 96 200 96 300 82C400 68 500 68 600 82C700 96 800 96 900 82C1000 68 1100 68 1200 82V120H0Z"/></svg>
+    <svg class="w3" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 98C100 90 200 90 300 98C400 106 500 106 600 98C700 90 800 90 900 98C1000 106 1100 106 1200 98V120H0Z"/></svg>
+  </div>
+
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
+<script>
+(() => {
+  'use strict';
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* outside the app */ } };
+  const $ = (id) => document.getElementById(id);
+
+  // Strings in the app's language, embedded when the page is served (the
+  // app serves it again when the language changes).
+  const I18N = data.i18n || { lang: 'en', strings: {} };
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+  for (const attr of ['placeholder', 'title', 'aria-label']) {
+    for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
+  }
+  document.title = t('together.window_title');
+
+  const h = (tag, attrs, ...children) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'text') el.textContent = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of children) if (c) el.append(c);
+    return el;
+  };
+
+  const PERIOD = 30 * 60;
+  // Crockford's Base32, as the app reads codes: O is 0, I and L are 1.
+  const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  let view = { phase: 'idle', members: [] };
+  let countdown = 0;
+
+  // --- Code typing: upper case, look-alikes fixed, dashes every four -----------
+  function normalizeCode(text) {
+    let out = '';
+    for (let c of text.toUpperCase()) {
+      if (c === 'O') c = '0';
+      else if (c === 'I' || c === 'L') c = '1';
+      if (ALPHABET.includes(c)) out += c;
+      if (out.length === 12) break;
+    }
+    return out;
+  }
+  const formatCode = (raw) => raw.replace(/(.{4})(?=.)/g, '$1-');
+
+  const codeInput = $('code');
+  codeInput.addEventListener('input', () => {
+    const raw = normalizeCode(codeInput.value);
+    codeInput.value = formatCode(raw);
+    $('code-error').textContent = '';
+    updateJoin();
+  });
+  function updateJoin() {
+    $('join').disabled = !view.relay || normalizeCode(codeInput.value).length !== 12;
+  }
+
+  const nameInput = $('name');
+  const typedName = () => nameInput.value.trim().slice(0, 24);
+
+  $('start').addEventListener('click', () => send('together:start' + (typedName() ? ':' + typedName() : '')));
+  $('join-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const raw = normalizeCode(codeInput.value);
+    if (raw.length !== 12) {
+      $('code-error').textContent = t('together.code_length');
+      return;
+    }
+    send('together:join:' + raw + (typedName() ? ':' + typedName() : ''));
+  });
+
+  // --- Server address -----------------------------------------------------------
+  let editingServer = false;
+  $('server-change').addEventListener('click', () => {
+    editingServer = true;
+    $('relay').value = view.relay || '';
+    render();
+    $('relay').focus();
+  });
+  $('server-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const value = $('relay').value.trim();
+    if (!value) return;
+    editingServer = false;
+    send('together:relay:' + value);
+  });
+
+  // --- Buttons that ask twice ---------------------------------------------------
+  function armed(button, label, armedLabel, action) {
+    let timer = 0;
+    button.addEventListener('click', () => {
+      if (button.classList.contains('armed')) {
+        clearTimeout(timer);
+        button.classList.remove('armed');
+        button.textContent = label();
+        action();
+        return;
+      }
+      button.classList.add('armed');
+      button.textContent = armedLabel();
+      timer = setTimeout(() => { button.classList.remove('armed'); button.textContent = label(); }, 4000);
+    });
+  }
+  armed($('end'), () => t('together.end'), () => t('together.end_confirm'), () => send('together:leave'));
+  $('leave').addEventListener('click', () => send('together:leave'));
+  $('cancel').addEventListener('click', () => send('together:leave'));
+  $('dismiss').addEventListener('click', () => send('together:dismiss'));
+  $('new-code').addEventListener('click', () => send('together:new-code'));
+  $('copy').addEventListener('click', () => send('together:copy'));
+  $('resync').addEventListener('click', () => send('together:resync'));
+  $('open-site').addEventListener('click', () => send('together:open-site'));
+  $('show-window').addEventListener('click', () => send('together:watch'));
+  $('sound-pc').addEventListener('click', () => send('together:sound:pc'));
+  $('sound-app').addEventListener('click', () => send('together:sound:app'));
+  let askedAt = 0;
+  $('ask').addEventListener('click', () => {
+    askedAt = Date.now();
+    send('together:ask');
+    render();
+    setTimeout(render, 15500);
+  });
+  // "Share my window" or "Sync players", before and during a session.
+  for (const button of document.querySelectorAll('[data-mode]')) {
+    button.addEventListener('click', () => {
+      if (button.getAttribute('aria-checked') !== 'true') send('together:mode:' + button.dataset.mode);
+    });
+  }
+
+  // --- People -------------------------------------------------------------------
+  function initials(name) {
+    const letters = Array.from(name.trim());
+    return (letters[0] || '?').toUpperCase();
+  }
+
+  const POINTER = 'M6 3.5l12 7.2-5.2 1.3 3 6-2.3 1.2-3-6L6 17z';
+  function icon(d) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.8');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+    return svg;
+  }
+
+  // Each line of tags: plain words, and some with a tone.
+  function tagLine(parts) {
+    const line = h('span', { class: 'tags' });
+    parts.forEach((part, i) => {
+      if (i) line.append(', ');
+      line.append(typeof part === 'string' ? part : h('span', { class: part.tone, text: part.text }));
+    });
+    return line;
+  }
+
+  const STREAM_TAGS = {
+    watching: { key: 'together.stream.watching', tone: 'ok' },
+    connecting: { key: 'together.stream.connecting', tone: 'busy' },
+    failed: { key: 'together.stream.failed', tone: 'off' },
+  };
+
+  // Host, sharing: why the guests may not hear the window and what to do
+  // about it (all of the PC's sound for this session, or back to the app's).
+  function soundBox(view) {
+    const box = $('sound-box');
+    const had = box.contains(document.activeElement) ? document.activeElement : null;
+    let key = null;
+    let offerPc = false;
+    let offerApp = false;
+    if (view) {
+      const problem = view.soundProblem;
+      if (problem === 'page') key = 'together.sound_page';
+      else if (!view.soundWholePc) {
+        if (problem === 'unavailable') key = 'together.sound_unavailable';
+        else if (problem === 'silent') key = 'together.sound_silent';
+        offerPc = !!key;
+      } else {
+        key = problem === 'unavailable' ? 'together.sound_pc_failed'
+          : problem === 'silent' ? 'together.sound_pc_silent' : 'together.sound_pc_on';
+        offerApp = !view.soundAppUnavailable;
+      }
+    }
+    box.hidden = !key;
+    box.classList.toggle('warn', !!(view && view.soundProblem));
+    if (key) $('sound-text').textContent = t(key);
+    $('sound-pc').hidden = !offerPc;
+    $('sound-app').hidden = !offerApp;
+    // The button just used went away: the other one takes the focus.
+    if (had && had.offsetParent === null) {
+      const next = [$('sound-app'), $('sound-pc')].find((b) => !b.hidden && key);
+      if (next) next.focus();
+    }
+  }
+
+  function peopleList(list, members, hosting) {
+    const share = view.mode === 'share';
+    list.replaceChildren(...members.map((m) => {
+      const tags = [];
+      if (m.id === 'host') tags.push(t('together.host_tag'));
+      if (m.you) tags.push(t('together.you'));
+      if (!m.online) tags.push({ tone: 'off', text: t('together.offline') });
+      else if (hosting && m.asking) tags.push({ tone: 'ask', text: t('together.asks') });
+      if (hosting && share && m.online && m.id !== 'host') {
+        const tag = STREAM_TAGS[m.stream];
+        tags.push(tag ? { tone: tag.tone, text: t(tag.key) } : t('together.stream.none'));
+      }
+      if (m.control && m.id !== 'host') tags.push(t(share ? 'together.can_control' : 'together.can_control_sync'));
+      const row = h('li', { class: hosting && m.asking ? 'asking' : null },
+        h('span', { class: 'avatar', 'aria-hidden': 'true', text: initials(m.name) }),
+        h('span', { class: 'who' }, h('span', { class: 'nm', text: m.name }), tagLine(tags)));
+      if (!hosting || m.id === 'host') {
+        row.append(h('span'));
+        return row;
+      }
+      const actions = h('span', { class: 'actions' });
+      if (m.asking && !m.control) {
+        actions.append(
+          h('button', { type: 'button', class: 'allow primary', text: t('together.allow'), onclick: () => send('together:member-control:' + m.id + ':1') }),
+          h('button', { type: 'button', class: 'deny', text: '×', title: t('together.not_now'), 'aria-label': t('together.not_now'), onclick: () => send('together:dismiss-ask:' + m.id) }));
+      } else {
+        const label = m.control
+          ? t(share ? 'together.control_take' : 'together.control_take_sync', { name: m.name })
+          : t(share ? 'together.control_give' : 'together.control_give_sync', { name: m.name });
+        const toggle = h('button', { type: 'button', class: 'ctl', 'aria-pressed': String(!!m.control), title: label, 'aria-label': label,
+          onclick: () => send('together:member-control:' + m.id + ':' + (m.control ? 0 : 1)) });
+        toggle.append(icon(POINTER));
+        actions.append(toggle);
+        // While someone asks, the answer comes first (Remove after it).
+        const remove = h('button', { type: 'button', class: 'remove danger', text: t('together.remove') });
+        armed(remove, () => t('together.remove'), () => t('together.remove_confirm'), () => send('together:kick:' + m.id));
+        actions.append(remove);
+      }
+      row.append(actions);
+      return row;
+    }));
+    if (hosting && members.length < 2) {
+      list.append(h('li', { class: 'empty', text: t('together.nobody_yet') }));
+    }
+  }
+
+  function renderModes() {
+    for (const button of document.querySelectorAll('[data-mode]')) {
+      button.setAttribute('aria-checked', String(button.dataset.mode === (view.mode || 'share')));
+    }
+  }
+
+  // --- The code's countdown ----------------------------------------------------------
+  function tickCode() {
+    const left = Math.max(0, Math.round(view.codeEnds - Date.now() / 1000));
+    const m = Math.floor(left / 60);
+    const s = String(left % 60).padStart(2, '0');
+    $('code-left').textContent = t('together.changes_in', { time: `${m}:${s}` });
+    $('code-fill').style.transform = `scaleX(${Math.min(1, left / PERIOD)})`;
+  }
+
+  function showCode(code) {
+    const box = $('code-text');
+    const groups = (code || '').split('-');
+    box.replaceChildren(...groups.flatMap((g, i) => (i ? [h('span', { class: 'sep', 'aria-hidden': 'true', text: '–' }), h('span', { text: g })] : [h('span', { text: g })])));
+    box.setAttribute('aria-label', (code || '').split('').join(' '));
+  }
+
+  // --- Status of a guest --------------------------------------------------------
+  const TONES = {
+    in_sync: 'ok', live: 'ok', syncing: 'busy', opening: 'busy', waiting: 'busy', no_video: 'busy',
+    host_ad: 'warn', own_ad: 'warn', cannot_seek: 'warn', other_site: 'warn', host_elsewhere: 'idle',
+  };
+
+  // --- Drawing ------------------------------------------------------------------
+  function render() {
+    const phase = view.phase || 'idle';
+    for (const p of ['idle', 'connecting', 'host', 'guest', 'ended']) $('v-' + p).hidden = p !== phase;
+    clearInterval(countdown);
+
+    renderModes();
+    if (phase === 'idle') {
+      $('lede').textContent = t('together.intro');
+      if (document.activeElement !== nameInput && !nameInput.value) nameInput.value = view.name || '';
+      const noRelay = !view.relay;
+      $('start').disabled = noRelay;
+      updateJoin();
+      $('code-error').textContent = view.codeError ? t(view.codeError) : '';
+      // The server: hidden if the build has one; asked for if there is none.
+      $('server').hidden = !!view.relayFixed;
+      const editing = noRelay || editingServer;
+      $('server-form').hidden = !editing;
+      $('server-line').hidden = editing;
+      $('server-addr').textContent = (view.relay || '').replace(/^wss:\/\//, '');
+      $('relay-error').textContent = view.relayError ? t('together.server_invalid') : '';
+      if (view.relayError) $('server-form').hidden = false;
+    } else if (phase === 'connecting') {
+      $('lede').textContent = t('together.intro');
+      $('connecting-text').textContent = view.reconnecting ? t('together.reconnecting') : t(view.code ? 'together.connecting' : 'together.joining');
+    } else if (phase === 'host') {
+      $('lede').textContent = t('together.hosting');
+      showCode(view.code);
+      tickCode();
+      countdown = setInterval(tickCode, 1000);
+      const banner = $('host-banner');
+      banner.hidden = !view.reconnecting;
+      banner.textContent = t('together.reconnecting');
+      $('host-people-title').textContent = t('together.people', { count: view.members.length, max: view.maxPeople || 6 });
+      peopleList($('host-people'), view.members, true);
+      const share = view.mode === 'share';
+      const guests = view.members.filter((m) => m.id !== 'host');
+      const watching = guests.filter((m) => m.stream === 'watching').length;
+      const connecting = guests.some((m) => m.stream === 'connecting');
+      const status = $('mode-status');
+      let text;
+      let tone = 'idle';
+      if (!share) text = t('together.sync_status');
+      else if (view.locked) text = t('together.sharing_paused');
+      else if (watching) { text = t('together.sharing_now', { count: watching }); tone = 'live'; }
+      else if (connecting) text = t('together.sharing_connecting');
+      else text = t('together.sharing_waiting');
+      status.dataset.tone = tone;
+      $('mode-status-text').textContent = text;
+      $('protected-note').hidden = !(share && view.protectedPage);
+      soundBox(share && view.sharing ? view : null);
+      $('control-hint').textContent = guests.length ? t(share ? 'together.control_hint' : 'together.control_hint_sync') : '';
+      $('control-hint').hidden = !guests.length;
+    } else if (phase === 'guest') {
+      $('lede').textContent = t('together.watching_with', { name: view.hostName });
+      const share = view.mode === 'share';
+      const status = $('status');
+      if (share) {
+        let key = 'connecting';
+        let tone = 'busy';
+        if (view.paused) { key = 'paused'; tone = 'warn'; }
+        else if (!view.watching) { key = 'closed'; tone = 'idle'; }
+        else if (view.stream === 'watching') { key = 'watching'; tone = 'ok'; }
+        else if (view.stream === 'failed') { key = 'failed'; tone = 'warn'; }
+        status.dataset.tone = tone;
+        $('status-text').textContent = t('together.window.' + key, { name: view.hostName });
+      } else {
+        const key = String(view.status || 'waiting').replace(/-/g, '_');
+        status.dataset.tone = TONES[key] || 'idle';
+        $('status-text').textContent = t('together.status.' + key, { site: view.site || '' });
+      }
+      $('now-title').textContent = view.title || '';
+      $('now-site').textContent = view.title ? view.site || '' : '';
+      const open = $('open-site');
+      open.hidden = share || !view.openUrl;
+      open.textContent = t('together.open_site', { site: view.site || '' });
+      $('show-window').hidden = !(share && !view.watching && !view.locked);
+      const banner = $('guest-banner');
+      banner.hidden = !(view.hostAway || view.reconnecting);
+      banner.textContent = view.reconnecting ? t('together.reconnecting') : t('together.host_away');
+      $('guest-people-title').textContent = t('together.people', { count: view.members.length, max: view.maxPeople || 6 });
+      peopleList($('guest-people'), view.members, false);
+      $('control-note').textContent = share
+        ? t(view.control ? 'together.you_control' : 'together.you_watch', { name: view.hostName })
+        : t(view.control ? 'together.control_everyone' : 'together.control_host_only');
+      const ask = $('ask');
+      const waiting = Date.now() - askedAt < 15000;
+      ask.hidden = !share || view.control;
+      ask.disabled = waiting;
+      ask.textContent = t(waiting ? 'together.asked' : 'together.ask');
+      $('resync').textContent = t(share ? 'together.reconnect' : 'together.resync');
+      $('resync').title = t(share ? 'together.reconnect_hint' : 'together.resync_hint');
+      $('rtt').textContent = Number.isFinite(view.rtt) ? t('together.delay', { ms: Math.max(1, Math.round(view.rtt / 2)) }) : '';
+    } else if (phase === 'ended') {
+      $('lede').textContent = '';
+      $('ended-text').textContent = view.ended ? t(view.ended) : '';
+      $('dismiss').focus();
+    }
+  }
+
+  // The app sends the state on every change.
+  Object.defineProperty(window, '__ytmpTogether', {
+    value: (next) => {
+      if (!next || typeof next !== 'object') return;
+      view = next;
+      if (!Array.isArray(view.members)) view.members = [];
+      render();
+    },
+  });
+  // "Copied" for a moment.
+  let copiedTimer = 0;
+  Object.defineProperty(window, '__ytmpTogetherCopied', {
+    value: () => {
+      const button = $('copy');
+      button.classList.add('done');
+      $('copy-label').textContent = t('together.copied');
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => { button.classList.remove('done'); $('copy-label').textContent = t('together.copy'); }, 1600);
+    },
+  });
+
+  // Escape closes the window (the session goes on).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.repeat) send('together:close');
+  });
+  render();
+  send('together:ready');
+})();
+</script>
+</body>
+</html>

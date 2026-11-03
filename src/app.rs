@@ -1,12 +1,14 @@
-//! Estado de la aplicación y ejecución de órdenes.
+//! Application state and command handling.
 //!
-//! Todas las acciones llegan aquí como [`Command`], vengan de la página
-//! (barra lateral, atajos locales), de la bandeja o de un atajo global.
+//! Every action arrives here as a [`Command`], whether it comes from the
+//! page (side bar, local shortcuts), the tray or a global shortcut.
 //!
-//! Con la app bloqueada solo pasan las órdenes de la lista
-//! `allowed_while_locked`; el resto se descarta.
+//! While the app is locked only the commands in `allowed_while_locked` get
+//! through; the rest are dropped.
 
 use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -20,20 +22,27 @@ use tao::{
 use wry::{WebContext, WebView};
 
 use crate::{
+    cast::Cast,
     config::{self, ExtensionIds, LockMode, Paths, Settings, Store},
+    devtools,
     extensions::{self, ExtensionEvent, ExtensionHost, ExtensionStatus, LocalExtension},
-    hotkeys::{self, Hotkeys, ShortcutInfo},
     home::SharedHomeState,
-    ipc::{Command, Edge, UserEvent, MIN_OPACITY},
+    hotkeys::{self, Action, Hotkeys, ShortcutView},
+    i18n::{self, Lang},
+    ipc::{Command, Edge, Setting, UserEvent, MIN_OPACITY},
     lifecycle::Lifecycle,
     links,
-    lock,
+    lock::{self, HelloError},
     lockview::{LockView, Screen},
     media::{MediaAction, MediaState},
     mini::{self, Mini},
     platform,
-    security::{self, LegacyEfs},
+    remote::{self, Outcome, Remote},
+    security::{self, LegacyEfs, Question},
     services::{self, Agent, Service},
+    settings_panel::Panel as SettingsPanel,
+    together::{self, protocol::Mode, session::StreamState, Together},
+    together_panel::Panel,
     topmost,
     tray::{Tray, TrayState},
     user_agent::Agents,
@@ -41,30 +50,34 @@ use crate::{
     window as app_window,
 };
 
-/// Opacidad máxima en modo fantasma: así se nota que está activo.
+/// Highest opacity in ghost mode: so it is clear it is on.
 const GHOST_MAX_OPACITY: u8 = 70;
-/// Separación de los bordes al colocar en una esquina (px lógicos).
+/// Distance from the edges when moving to a corner (logical px).
 const CORNER_MARGIN: f64 = 12.0;
-/// Con el bloqueo activo, se bloquea sola tras este tiempo oculta.
+/// With the lock on, it locks itself after being hidden this long.
 const LOCK_AFTER_HIDDEN: Duration = Duration::from_secs(10 * 60);
-/// Como mucho una pestaña nueva en el navegador cada tanto (contra spam).
+/// At most one new browser tab every so often (against spam).
 const EXTERNAL_INTERVAL: Duration = Duration::from_secs(2);
+/// Notices about guests using the window, at most this often (each).
+const USING_NOTICE: Duration = Duration::from_secs(60);
+const BUSY_NOTICE: Duration = Duration::from_secs(3);
+const BLOCKED_NOTICE: Duration = Duration::from_secs(20);
 
-/// Para qué está abierta la pantalla de bloqueo.
+/// What the lock screen is open for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Goal {
     Unlock,
-    /// Cambiar el modo de bloqueo a este.
+    /// Change the lock mode to this one.
     Change(LockMode),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
-    /// Verificar con el método actual.
+    /// Verify with the current method.
     Verify,
-    /// Elegir un PIN nuevo.
+    /// Choose a new PIN.
     NewPin,
-    /// Probar Windows Hello antes de activarlo.
+    /// Try Windows Hello before turning it on.
     ConfirmHello,
 }
 
@@ -79,6 +92,8 @@ pub struct App {
     webview: WebView,
     web_context: WebContext,
     proxy: EventLoopProxy<UserEvent>,
+    /// Services whose page was found changed this session (warned once).
+    page_warnings: BTreeSet<&'static str>,
     paths: Paths,
     settings: Settings,
     lifecycle: Lifecycle,
@@ -99,23 +114,23 @@ pub struct App {
     hotkeys: Hotkeys,
 
     agents: Agents,
-    /// User-Agent con el que se hizo la última navegación.
+    /// User-Agent of the last navigation.
     current_agent: Agent,
     home_state: SharedHomeState,
-    /// ¿Corre con UIAccess (modo de superposición máxima)?
+    /// Running with UIAccess (maximum overlay mode)?
     overlay: bool,
 
-    /// Lo que suena ahora (informe de media.js).
+    /// What is playing now (media.js report).
     media: MediaState,
-    /// Barra de música (dentro de la barra de tareas).
+    /// Music bar (inside the taskbar).
     mini: Mini,
-    /// El usuario cerró la barra de este servicio de música (clic derecho):
-    /// no vuelve sola hasta cambiar de sitio.
+    /// The user closed the bar of this music service (right click): it does
+    /// not come back by itself until the site changes.
     bar_dismissed: bool,
-    /// Para ignorar el clic suelto que Windows envía tras un doble clic.
+    /// To ignore the single click Windows sends after a double click.
     last_double_click: Option<Instant>,
 
-    // Seguridad
+    // Security
     store: Store,
     keys: Keys,
     legacy_efs: LegacyEfs,
@@ -126,27 +141,56 @@ pub struct App {
     pin_busy: bool,
     lock_error: Option<String>,
     hidden_since: Option<Instant>,
-    /// Ids de extensiones instaladas, compartidos con el filtro de navegación.
+    /// Installed extension ids, shared with the navigation filter.
     allowed_extensions: Arc<Mutex<Vec<String>>>,
     last_external: Option<Instant>,
-    /// Hay extensiones por aprobar que esperan al desbloqueo (nadie puede
-    /// aprobar nada con la app bloqueada).
+    /// Extensions waiting for approval until unlocked (nobody can approve
+    /// anything while the app is locked).
     approvals_pending: bool,
-    /// PIN olvidado sin Windows Hello: se quita cuando el borrado de las
-    /// sesiones termine bien (no antes).
+    /// Forgotten PIN without Windows Hello: it is removed once clearing the
+    /// sessions has succeeded (not before).
     pin_reset_pending: bool,
 
-    /// Servicio de "Mi música" (biblioteca, descargas, licencias).
+    /// The "My music" service (library, downloads, licenses).
     music: Option<crate::music::Handle>,
+
+    /// Watch together: the session and its window.
+    together: Together,
+    panel: Panel,
+    /// Was a session on at the last look (the side bar and tray say so)?
+    together_shown: Option<&'static str>,
+    /// Sending the window (host) and guests using it.
+    cast: Cast,
+    remote: Remote,
+    /// The app's menu or help is open (guests cannot click on it).
+    menu_open: bool,
+    /// The main page's size in CSS px, as the page says (exact even with
+    /// the page zoomed; the pictures' size is the fallback).
+    page_viewport: Option<remote::Viewport>,
+    /// Guest: the page it was on before the host's window took its place.
+    stream_return: Option<String>,
+    using_notices: BTreeMap<String, Instant>,
+    busy_notices: BTreeMap<String, Instant>,
+    blocked_notice: Option<Instant>,
+    /// The Settings window and the last state it got (sent again only
+    /// when something changed).
+    settings_panel: SettingsPanel,
+    settings_shown: RefCell<String>,
+    /// WebView2's version (Settings › Advanced).
+    webview_version: String,
+    /// Hardware acceleration as the engine started (a change applies on
+    /// the next start).
+    gpu_at_start: bool,
 }
 
-/// Estado que se envía a la página (barra lateral y menú).
+/// State sent to the page (side bar and menu).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PageState<'a> {
     version: &'static str,
     pinned: bool,
     video_only: bool,
+    fullscreen_in_window: bool,
     opacity: u8,
     ghost: bool,
     fullscreen: bool,
@@ -155,10 +199,55 @@ struct PageState<'a> {
     extensions: &'a [ExtensionStatus],
     extension_problems: &'a [String],
     extensions_error: Option<&'a str>,
-    hotkeys: &'a [ShortcutInfo],
+    hotkeys: Vec<ShortcutView>,
     last_service: Option<&'a str>,
     start_with_last: bool,
     overlay: bool,
+    /// Watch together: `host`, `guest` or nothing.
+    together: Option<&'static str>,
+    hardware_acceleration: bool,
+}
+
+/// Strings for the scripts in the current page (see `push_locale`).
+#[derive(Serialize)]
+struct Locale {
+    #[serde(flatten)]
+    info: i18n::LanguageInfo,
+    /// For the side bar (ui.js), on every page.
+    ui: serde_json::Map<String, serde_json::Value>,
+    /// For the app's own page (start screen, My music), if that is the page.
+    page: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// State sent to the Settings window.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsView<'a> {
+    version: &'static str,
+    webview: &'a str,
+    /// The section to open at (once, when asked for).
+    section: Option<&'static str>,
+    pinned: bool,
+    opacity: u8,
+    ghost: bool,
+    video_only: bool,
+    fullscreen_in_window: bool,
+    taskbar_bar: bool,
+    autostart: bool,
+    start_with_last: bool,
+    tray: bool,
+    hardware_acceleration: bool,
+    /// What the engine runs with now (a change applies on restart).
+    hardware_acceleration_now: bool,
+    lock: LockMode,
+    overlay: bool,
+    together_name: &'a str,
+    together_mode: Mode,
+    together_active: bool,
+    extensions: &'a [ExtensionStatus],
+    extension_problems: &'a [String],
+    extensions_error: Option<&'a str>,
+    hotkeys: Vec<ShortcutView>,
 }
 
 pub struct Startup {
@@ -175,16 +264,20 @@ pub struct Startup {
     pub mini_window: Window,
     pub store: Store,
     pub keys: Keys,
-    /// Qué pasó con el cifrado EFS de la 0.6.0 al arrancar.
+    /// What happened to 0.6.0's EFS encryption on start.
     pub legacy_efs: LegacyEfs,
-    /// La clave de la bóveda no se pudo abrir y se creó otra.
+    /// The vault key could not be opened and a new one was made.
     pub vault_reset: bool,
     pub extension_ids: ExtensionIds,
     pub allowed_extensions: Arc<Mutex<Vec<String>>>,
     pub music: Option<crate::music::Handle>,
+    pub together_window: Window,
+    pub settings_window: Window,
+    pub cast_window: Window,
+    pub webview_version: String,
 }
 
-/// Tras un doble clic en la bandeja llega otro clic suelto: se ignora.
+/// After a double click on the tray another single click arrives: ignored.
 const DOUBLE_CLICK_GRACE: Duration = Duration::from_millis(600);
 
 impl App {
@@ -201,22 +294,65 @@ impl App {
             lock: s.settings.lock,
             autostart,
             tooltip: platform::APP_NAME.to_owned(),
+            language: i18n::current(),
             ..TrayState::default()
         };
+        let accelerators = [
+            Action::ToggleVisible,
+            Action::PlayPause,
+            Action::Next,
+            Action::Previous,
+            Action::Ghost,
+            Action::OpacityReset,
+            Action::Lock,
+        ]
+        .into_iter()
+        .filter_map(|action| hotkeys.keys_for(action).map(|keys| (action, keys)))
+        .collect();
+        // The music bar's tooltips name the shortcuts that work here.
+        let bar_shortcuts: serde_json::Map<String, serde_json::Value> = [
+            ("toggleVisible", Action::ToggleVisible),
+            ("playPause", Action::PlayPause),
+            ("next", Action::Next),
+            ("previous", Action::Previous),
+            ("mute", Action::Mute),
+            ("seekForward", Action::SeekForward),
+            ("seekBack", Action::SeekBack),
+        ]
+        .into_iter()
+        .filter_map(|(name, action)| hotkeys.keys_for(action).map(|keys| (name.to_owned(), keys.into())))
+        .collect();
         let bar_shift = s.settings.bar_shift;
-        let tray = match Tray::new(s.proxy.clone(), tray_state) {
+        let tray = match Tray::new(s.proxy.clone(), tray_state, accelerators) {
             Ok(tray) => Some(tray),
             Err(err) => {
-                eprintln!("sin icono en la bandeja: {err}");
+                eprintln!("no tray icon: {err}");
                 None
             }
         };
+
+        // Watch together: the build's relay, or the one typed in the window.
+        let (relay, relay_fixed) = match together::built_in_relay() {
+            Some(relay) => (Some(relay), true),
+            None => (s.settings.together_relay.as_deref().and_then(together::link::parse_relay), false),
+        };
+        let link_proxy = s.proxy.clone();
+        let together = Together::new(
+            Arc::new(move |id, event| {
+                let _ = link_proxy.send_event(UserEvent::Together(id, event));
+            }),
+            relay,
+            relay_fixed,
+            &s.settings.together_name,
+            if s.settings.together_share { Mode::Share } else { Mode::Sync },
+        );
 
         let mut app = Self {
             window: s.window,
             webview: s.webview,
             web_context: s.web_context,
             proxy: s.proxy.clone(),
+            page_warnings: BTreeSet::new(),
             paths: s.paths,
             settings: s.settings,
             lifecycle: Lifecycle::default(),
@@ -255,19 +391,36 @@ impl App {
             approvals_pending: false,
             pin_reset_pending: false,
             music: s.music,
+            together,
+            panel: Panel::new(s.together_window),
+            together_shown: None,
+            cast: Cast::new(s.cast_window),
+            remote: Remote::default(),
+            menu_open: false,
+            page_viewport: None,
+            stream_return: None,
+            using_notices: BTreeMap::new(),
+            busy_notices: BTreeMap::new(),
+            blocked_notice: None,
+            settings_panel: SettingsPanel::new(s.settings_window),
+            settings_shown: RefCell::new(String::new()),
+            webview_version: s.webview_version,
+            gpu_at_start: false,
         };
+        app.gpu_at_start = app.settings.hardware_acceleration;
+        app.mini.set_shortcuts(bar_shortcuts);
 
-        // "Siempre visible" se aplica después de crear el webview: con
-        // UIAccess, WebView2 no se inicializa si la ventana ya es topmost
-        // (WebView2Feedback #486).
+        // "Always on top" is applied after the webview exists: with
+        // UIAccess, WebView2 does not initialize if the window is already
+        // topmost (WebView2Feedback #486).
         app.window.set_always_on_top(app.settings.always_on_top);
 
-        // Primero el bloqueo: así nadie aprueba extensiones sin desbloquear.
+        // The lock first: so nobody approves extensions without unlocking.
         if app.settings.lock != LockMode::Off {
             app.lock_now();
         }
         app.reload_extensions();
-        // Sin bandeja no hay forma de volver a mostrar una ventana oculta.
+        // Without a tray there is no way to show a hidden window again.
         if app.hidden && app.tray.is_none() {
             app.hidden = false;
         }
@@ -277,11 +430,18 @@ impl App {
             app.window.set_visible(true);
         }
         app.apply_effects();
-        // Mantiene el reproductor sobre juegos en pantalla completa sin bordes.
-        topmost::start(app.hwnd());
+        // Keeps the player above borderless fullscreen games (and says what
+        // to change in a game it could not stay above).
+        let hint_proxy = app.proxy.clone();
+        topmost::start(
+            app.hwnd(),
+            Box::new(move |hint| {
+                let _ = hint_proxy.send_event(UserEvent::Command(Command::GameHint(hint)));
+            }),
+        );
         app.update_guard();
 
-        // Win+L o suspender: se bloquea (si el bloqueo está activado).
+        // Win+L or sleep: lock (if the lock is on).
         let lock_proxy = app.proxy.clone();
         security::on_session_lock(app.hwnd(), move || {
             let _ = lock_proxy.send_event(UserEvent::Command(Command::LockNow));
@@ -290,16 +450,19 @@ impl App {
             app.hidden_since = Some(Instant::now());
         }
         if s.vault_reset {
-            app.toast("Los ajustes cifrados no se pudieron abrir (¿perfil de Windows restablecido o chip de seguridad borrado?) y se empezó de cero.");
+            app.toast(&t!("app.vault_reset"));
+        }
+        if crate::diag::crashed_last_time() {
+            app.toast(&t!("app.crashed_last_time"));
         }
         app
     }
 
     // ------------------------------------------------------------------
-    // Eventos
+    // Events
     // ------------------------------------------------------------------
 
-    /// Devuelve `false` si la aplicación debe terminar.
+    /// Returns `false` if the app must quit.
     pub fn on_user_event(&mut self, event: UserEvent) -> bool {
         match event {
             UserEvent::Command(command) => self.handle(command),
@@ -311,12 +474,21 @@ impl App {
                 self.push_music(&json);
                 true
             }
+            UserEvent::Together(id, event) => {
+                let effects = self.together.on_link(id, event);
+                self.apply_together(effects);
+                true
+            }
+            UserEvent::Sound(chunk) => {
+                self.cast.sound(&chunk);
+                true
+            }
         }
     }
 
-    /// Envía un aviso del servicio de música a su página. La comprobación de
-    /// la dirección va en el propio script: si en ese instante la ventana
-    /// muestra otro sitio, no recibe nada (ni puede imitar la función).
+    /// Sends a message from the music service to its page. The address check
+    /// is in the script itself: if the window shows another site at that
+    /// moment, it gets nothing (and cannot imitate the function).
     fn push_music(&self, json: &str) {
         let script = format!(
             "location.origin === 'https://ytmp.localhost' && location.pathname === '/music' \
@@ -326,13 +498,13 @@ impl App {
         let _ = self.webview.evaluate_script(&script);
     }
 
-    /// Minimizar y restaurar llegan como `Resized`.
+    /// Minimizing and restoring arrive as `Resized`.
     pub fn on_resized(&mut self) {
         self.update_lifecycle();
         self.lock_view.resize(&self.window);
     }
 
-    /// Lo único que se atiende con la app bloqueada.
+    /// The only things handled while the app is locked.
     fn allowed_while_locked(command: &Command) -> bool {
         matches!(
             command,
@@ -364,15 +536,30 @@ impl App {
                 | Command::MiniHide
                 | Command::MiniHover(_)
                 | Command::MiniReady
+                // Reveals nothing, and the lock screen must be readable.
+                | Command::SetLanguage(_)
+                | Command::TogetherClose
+                // Sending stops on locking; these only tidy up after it.
+                | Command::CastReady
+                | Command::CastCaps(_)
+                | Command::CastSound(..)
+                | Command::CastState(..)
+                | Command::StreamState(_)
+                | Command::MenuOpen(_)
+                | Command::Viewport(..)
+                | Command::SettingsClose
         )
     }
 
-    /// Devuelve `false` si la aplicación debe terminar.
+    /// Returns `false` if the app must quit.
     pub fn handle(&mut self, command: Command) -> bool {
         if self.locked && !Self::allowed_while_locked(&command) {
             return true;
         }
         match command {
+            // A guest's press on the shared window never moves or resizes
+            // it (the page asks for that in answer to a press).
+            Command::Drag | Command::Resize(_) if self.remote.pressing(Instant::now()) => {}
             Command::Drag => {
                 if !self.fullscreen {
                     let _ = self.window.drag_window();
@@ -384,23 +571,28 @@ impl App {
                 }
             }
             Command::Ready => {
-                // Una navegación completa sale de la pantalla completa de la
-                // página; la ventana debe acompañarla.
+                // A full navigation leaves the page's fullscreen; the window
+                // must follow it.
                 if self.fullscreen {
                     self.set_fullscreen(false);
                 }
+                self.push_locale();
                 self.push_state();
+                // A new page: the guests see where the host is now.
+                let url = self.current_url();
+                let mut effects = self.together.on_media(&self.media, &url);
+                // A guest that left the host's window for another page.
+                if !is_stream_url(&url) {
+                    effects.extend(self.together.stream_left());
+                }
+                self.apply_together(effects);
             }
             Command::TogglePin => {
                 self.settings.always_on_top = !self.settings.always_on_top;
                 self.window.set_always_on_top(self.settings.always_on_top);
                 self.apply_effects();
                 self.save_settings();
-                self.toast(if self.settings.always_on_top {
-                    "Siempre visible: activado"
-                } else {
-                    "Siempre visible: desactivado"
-                });
+                self.toast(&if self.settings.always_on_top { t!("app.always_on_top_on") } else { t!("app.always_on_top_off") });
                 self.state_changed();
             }
             Command::SetFullscreen(on) => self.set_fullscreen(on),
@@ -409,24 +601,28 @@ impl App {
                 let value = (i16::from(self.settings.opacity) + i16::from(delta))
                     .clamp(i16::from(MIN_OPACITY), 100) as u8;
                 self.set_opacity(value);
-                self.toast(&format!("Opacidad {value} %"));
+                self.toast(&t!("app.opacity", value = value));
             }
             Command::ResetOpacity => {
                 self.set_opacity(100);
-                self.toast("Opacidad 100 %");
+                self.toast(&t!("app.opacity", value = 100));
             }
             Command::ToggleGhost => {
                 self.ghost = !self.ghost;
                 self.apply_effects();
                 if self.ghost {
-                    // Si estaba oculta, se muestra: si no, el modo no tendría
-                    // efecto visible y sería confuso.
+                    // If it was hidden, show it: otherwise the mode would have
+                    // no visible effect, which would be confusing.
                     if self.hidden {
                         self.show();
                     }
-                    self.toast("Modo fantasma: los clics atraviesan la ventana. Ctrl+Alt+G para salir.");
+                    let message = match self.hotkeys.keys_for(Action::Ghost) {
+                        Some(keys) => t!("app.ghost_on", keys = keys),
+                        None => t!("app.ghost_on_tray"),
+                    };
+                    self.toast(&message);
                 } else {
-                    self.toast("Modo fantasma desactivado");
+                    self.toast(&t!("app.ghost_off"));
                 }
                 self.state_changed();
             }
@@ -457,11 +653,11 @@ impl App {
             }
             Command::OpenService(id) => match services::by_id(&id) {
                 Some(service) => self.open_service(service),
-                None => self.toast("Ese servicio no existe"),
+                None => self.toast(&t!("app.no_such_service")),
             },
             Command::OpenUrl(text) => match services::parse_user_url(&text) {
                 Some(url) => self.open_url(url),
-                None => self.toast("Esa dirección no es válida: escribe algo como plex.tv/web"),
+                None => self.toast(&t!("app.address_hint")),
             },
             Command::SetStartWithLast(on) => {
                 self.settings.start_with_last = on;
@@ -479,6 +675,7 @@ impl App {
                 }
             }
             Command::Quit => {
+                crate::diag::note("quit (asked for)");
                 self.save_on_exit();
                 return false;
             }
@@ -489,8 +686,8 @@ impl App {
             }
             Command::OpenClipboard => {
                 let text = platform::read_clipboard_text().unwrap_or_default();
-                // YouTube se normaliza (youtu.be, ids sueltos); el resto de
-                // servicios del catálogo se aceptan tal cual.
+                // YouTube links are normalized (youtu.be, bare ids); the other
+                // catalog services are taken as they are.
                 let url = links::normalize(&text).and_then(|u| url::Url::parse(&u).ok()).or_else(|| {
                     services::parse_user_url(&text).filter(|u| services::for_url(u).is_some())
                 });
@@ -501,7 +698,7 @@ impl App {
                         }
                         self.open_url(url);
                     }
-                    None => self.toast("El portapapeles no contiene un enlace de un servicio de la lista"),
+                    None => self.toast(&t!("app.clipboard_no_link")),
                 }
             }
             Command::Media(action) => self.media_action(action),
@@ -519,16 +716,21 @@ impl App {
                     self.update_tray();
                 }
                 self.refresh_bar();
+                if self.together.is_active() {
+                    let url = self.current_url();
+                    let effects = self.together.on_media(&self.media, &url);
+                    self.apply_together(effects);
+                }
             }
             Command::TrayClick(x, y) => {
                 if self.last_double_click.is_some_and(|t| t.elapsed() < DOUBLE_CLICK_GRACE) {
                     return true;
                 }
                 if self.locked && (self.hidden || self.window.is_minimized()) {
-                    // Bloqueada: el clic muestra la pantalla de bloqueo.
+                    // Locked: the click shows the lock screen.
                     self.show();
                 } else if self.hidden || self.window.is_minimized() {
-                    // Oculto: el clic abre (o cierra) la barra de controles.
+                    // Hidden: the click opens (or closes) the controls.
                     if self.mini.is_visible() {
                         self.close_bar();
                     } else {
@@ -560,20 +762,16 @@ impl App {
                 self.settings.taskbar_bar = !self.settings.taskbar_bar;
                 self.bar_dismissed = false;
                 self.save_settings();
-                self.toast(if self.settings.taskbar_bar {
-                    "Barra de música en la barra de tareas: activada"
-                } else {
-                    "Barra de música en la barra de tareas: desactivada"
-                });
+                self.toast(&if self.settings.taskbar_bar { t!("app.taskbar_bar_on") } else { t!("app.taskbar_bar_off") });
                 self.update_tray();
                 self.refresh_bar();
             }
             Command::ExtensionsFolder => platform::open_path(&self.paths.extensions),
             Command::ExtensionsReload => {
-                // "Recargar" vuelve a preguntar por las que se rechazaron.
+                // "Reload" asks again about the rejected ones.
                 self.settings.rejected_extensions.clear();
                 self.reload_extensions();
-                self.toast("Extensiones recargadas. Recarga la página (F5) para aplicarlas.");
+                self.toast(&t!("app.extensions_reloaded"));
             }
             Command::ExtensionToggle(id) => {
                 if let Some(status) = self.extensions.iter().find(|s| s.id.as_deref() == Some(id.as_str())) {
@@ -590,24 +788,35 @@ impl App {
                 match page {
                     Some(page) => {
                         let _ = self.webview.load_url(&format!("chrome-extension://{id}/{page}"));
+                        // The options open in the player: Settings steps aside.
+                        self.settings_panel.hide();
+                        if self.hidden {
+                            self.show();
+                        }
                     }
-                    None => self.toast("Esta extensión no tiene página de opciones"),
+                    None => self.toast(&t!("app.extension_no_options")),
                 }
             }
             Command::Navigate(url) => match url::Url::parse(&url) {
                 Ok(url) => self.open_url(url),
-                Err(_) => self.toast("Dirección no válida"),
+                Err(_) => self.toast(&t!("app.invalid_address")),
             },
             Command::OpenExternal(url) => {
                 if self.last_external.is_some_and(|t| t.elapsed() < EXTERNAL_INTERVAL) {
                     return true;
                 }
+                // Not in answer to a guest's click on the shared window.
+                let now = Instant::now();
+                if self.remote.pressing(now) {
+                    self.toast(&t!("app.remote_external_blocked"));
+                    return true;
+                }
                 self.last_external = Some(Instant::now());
                 security::open_in_browser(&url);
                 let host = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default();
-                self.toast(&format!("Abierto en tu navegador: {host}"));
+                self.toast(&t!("app.opened_in_browser", host = host));
             }
-            Command::Blocked(reason) => self.toast(&format!("Bloqueado: {reason}")),
+            Command::Blocked(reason) => self.toast(&t!("app.blocked", reason = i18n::text(&reason))),
             Command::LockNow => self.lock_now(),
             Command::SetLock(mode) => self.begin_change(mode),
             Command::SignOutAll => self.sign_out_all(),
@@ -628,9 +837,9 @@ impl App {
                     Ok(true) => {
                         self.unlock();
                         self.apply_lock(LockMode::Off, None);
-                        self.toast("PIN quitado tras verificarte con Windows Hello. Puedes crear otro en la bandeja → Seguridad.");
+                        self.toast(&t!("app.pin_removed_with_hello"));
                     }
-                    Ok(false) => self.lock_failed("Windows Hello no confirmó tu identidad."),
+                    Ok(false) => self.lock_failed(&t!("lock.hello_not_confirmed")),
                     Err(_) => self.reset_forgotten_pin(),
                 }
             }
@@ -638,8 +847,8 @@ impl App {
                 self.hello_busy = false;
                 match result {
                     Ok(true) => self.verified(),
-                    Ok(false) => self.lock_failed("Windows Hello no confirmó tu identidad. Vuelve a intentarlo."),
-                    Err(err) => self.lock_failed(&format!("Windows Hello {err}.")),
+                    Ok(false) => self.lock_failed(&t!("lock.hello_try_again")),
+                    Err(err) => self.lock_failed(&HelloError::text(&err)),
                 }
             }
             Command::PinChecked(ok) => {
@@ -654,14 +863,14 @@ impl App {
                     let wait = lock::delay_after(self.settings.lock_failures);
                     self.settings.lock_blocked_until = if wait > 0 { lock::unix_now() + wait } else { 0 };
                     self.save_settings();
-                    self.lock_failed("PIN incorrecto");
+                    self.lock_failed(&t!("lock.pin_wrong"));
                 }
             }
             Command::PinHashed(result) => {
                 self.pin_busy = false;
                 match result {
                     Ok(hash) => self.apply_lock(LockMode::Pin, Some(hash)),
-                    Err(err) => self.lock_failed(&format!("No se pudo guardar el PIN ({err})")),
+                    Err(err) => self.lock_failed(&t!("lock.pin_save_failed", error = err)),
                 }
             }
             Command::BrowsingDataCleared(ok) => {
@@ -670,15 +879,15 @@ impl App {
                         self.unlock();
                         self.apply_lock(LockMode::Off, None);
                     } else {
-                        self.lock_failed("No se pudieron borrar las sesiones, así que el PIN sigue puesto.");
+                        self.lock_failed(&t!("lock.sessions_not_cleared"));
                         return true;
                     }
                 }
                 if ok {
                     self.navigate(services::HOME_URL, Agent::Chrome);
-                    self.toast("Sesiones cerradas y datos de navegación borrados en todos los servicios");
+                    self.toast(&t!("app.signed_out"));
                 } else {
-                    self.toast("No se pudieron borrar los datos (actualiza Microsoft Edge WebView2)");
+                    self.toast(&t!("app.clear_failed"));
                 }
             }
             Command::Music(request) => self.on_music(request),
@@ -687,25 +896,622 @@ impl App {
                 match platform::set_autostart(wanted) {
                     Ok(()) => {
                         self.autostart = wanted;
-                        self.toast(if wanted {
-                            "Se iniciará con Windows, oculto en la bandeja"
-                        } else {
-                            "Ya no se iniciará con Windows"
-                        });
+                        self.toast(&if wanted { t!("app.autostart_on") } else { t!("app.autostart_off") });
                     }
-                    Err(err) => self.toast(&format!("No se pudo cambiar el inicio con Windows: {err}")),
+                    Err(err) => self.toast(&t!("app.autostart_failed", error = err)),
                 }
                 self.state_changed();
             }
+            Command::SetLanguage(lang) => self.set_language(lang),
+            Command::TogetherOpen => {
+                if !self.panel.show(&self.webview, &mut self.web_context, &self.proxy, &self.home_state) {
+                    self.toast(&t!("app.together_failed"));
+                }
+            }
+            Command::TogetherReady => self.panel.push(&self.together.view_json()),
+            Command::TogetherClose => self.panel.hide(),
+            Command::TogetherStart(name) => {
+                crate::diag::note(format!("together: hosting ({})", if self.settings.together_share { "share" } else { "sync" }));
+                self.remember_together_name(&name);
+                let effects = self.together.start(&name);
+                self.apply_together(effects);
+            }
+            Command::TogetherJoin(code, name) => {
+                crate::diag::note("together: joining");
+                self.remember_together_name(&name);
+                let effects = self.together.join(&code, &name);
+                self.apply_together(effects);
+            }
+            Command::TogetherLeave => {
+                let effects = self.together.leave();
+                self.apply_together(effects);
+            }
+            Command::TogetherDismiss => {
+                let effects = self.together.dismiss();
+                self.apply_together(effects);
+            }
+            Command::TogetherKick(member) => {
+                let effects = self.together.kick(&member);
+                self.apply_together(effects);
+            }
+            Command::TogetherNewCode => {
+                let effects = self.together.new_code();
+                self.apply_together(effects);
+            }
+            Command::TogetherCopy => {
+                if let Some(code) = self.together.code_text() {
+                    if platform::write_clipboard_text(&code) {
+                        self.panel.copied();
+                    }
+                }
+            }
+            Command::TogetherMode(mode) => {
+                let share = mode == Mode::Share;
+                crate::diag::note(format!("together: mode {}", if share { "share" } else { "sync" }));
+                if self.settings.together_share != share {
+                    self.settings.together_share = share;
+                    self.save_settings();
+                }
+                let effects = self.together.set_mode(mode);
+                self.apply_together(effects);
+            }
+            Command::TogetherMemberControl(member, on) => {
+                if !on {
+                    self.release_remote(&member);
+                }
+                let effects = self.together.set_member_control(&member, on);
+                self.apply_together(effects);
+            }
+            Command::TogetherDismissAsk(member) => {
+                let effects = self.together.dismiss_ask(&member);
+                self.apply_together(effects);
+            }
+            Command::TogetherWatch => {
+                if self.together.wants_window() {
+                    self.show_stream();
+                }
+            }
+            Command::TogetherResync => {
+                let effects = self.together.resync();
+                self.apply_together(effects);
+            }
+            Command::TogetherOpenSite => {
+                if let Some(url) = self.together.site_to_open() {
+                    self.open_url(url);
+                    if self.hidden {
+                        self.show();
+                    }
+                }
+            }
+            Command::TogetherRelay(text) => {
+                let (taken, effects) = self.together.set_relay_text(&text);
+                if taken {
+                    self.settings.together_relay = self.together.relay().map(|u| u.as_str().to_owned());
+                    self.save_settings();
+                }
+                self.apply_together(effects);
+            }
+            Command::CastReady => {
+                if self.cast.on_ready() {
+                    // It reloaded: its connections are gone.
+                    let effects = self.together.cast_reset();
+                    self.apply_together(effects);
+                }
+            }
+            Command::CastCaps(sound) => {
+                crate::diag::note(format!("cast: page can send sound: {sound}"));
+                let sound = self.cast.set_page_sound(sound);
+                let effects = self.together.set_sound(sound);
+                self.apply_together(effects);
+            }
+            Command::CastSound(id, ok) => {
+                crate::diag::note(format!("cast: sound {}", if ok { "on" } else { "off" }));
+                if let Some(sound) = self.cast.set_capture_sound(id, ok) {
+                    let effects = self.together.set_sound(sound);
+                    self.apply_together(effects);
+                }
+            }
+            Command::GameHint(hint) => {
+                // No focus taken: the user may be anywhere by now.
+                self.toast(&match hint {
+                    topmost::GameHint::Minecraft => t!("app.game_exclusive_minecraft"),
+                    topmost::GameHint::Other(game) if game.is_empty() => t!("app.game_exclusive", game = t!("app.a_game")),
+                    topmost::GameHint::Other(game) => t!("app.game_exclusive", game = game),
+                });
+            }
+            Command::PageCheck(check) => {
+                crate::diag::note(check.line());
+                // Once per session and service: the diary has the rest.
+                if let Some(service) = check.broken() {
+                    if self.page_warnings.insert(service) {
+                        self.toast(&match *check {
+                            crate::diag::PageCheck::GoogleSignInRefused => t!("app.sign_in_refused"),
+                            _ => t!("app.page_changed", service = service),
+                        });
+                    }
+                }
+            }
+            Command::TogetherSound(whole_pc) => {
+                let source = if whole_pc { crate::loopback::Source::Pc } else { crate::loopback::Source::App };
+                crate::diag::note(format!("share: the host chose {}", source.label()));
+                if let Some(sound) = self.cast.set_source(source, &self.proxy) {
+                    let effects = self.together.set_sound(sound);
+                    self.apply_together(effects);
+                }
+            }
+            Command::CastOffer(member, sdp) => {
+                crate::diag::note(format!("cast: offer for {member} ({} bytes)", sdp.len()));
+                let effects = self.together.cast_offer(&member, &sdp);
+                self.apply_together(effects);
+            }
+            Command::CastState(member, state) => {
+                crate::diag::note(format!("cast: {member} {state}"));
+                let Some(state) = StreamState::from_report(&state) else { return true };
+                if state == StreamState::Failed {
+                    self.release_remote(&member);
+                }
+                let effects = self.together.cast_state(&member, state);
+                self.apply_together(effects);
+            }
+            Command::CastInput(member, json) => self.remote_input(&member, &json),
+            Command::CastStats(json) => {
+                for line in crate::diag::cast_stats(&json) {
+                    crate::diag::note(line);
+                }
+                // Whether the shared page is making any sound right now (if
+                // it is and the guests hear nothing, the capture is at fault).
+                if let Some(playing) = devtools::playing_audio(&self.webview) {
+                    crate::diag::note(format!("cast: the page {} sound", if playing { "plays" } else { "plays no" }));
+                }
+            }
+            Command::StreamStats(json) => {
+                if let Some(line) = crate::diag::stream_stats(&json) {
+                    crate::diag::note(line);
+                }
+            }
+            Command::StreamReady => {
+                crate::diag::note("watch: page ready");
+                let effects = self.together.stream_ready();
+                self.apply_together(effects);
+            }
+            Command::StreamAnswer(sdp) => {
+                crate::diag::note(format!("watch: answer ({} bytes)", sdp.len()));
+                let effects = self.together.stream_answer(&sdp);
+                self.apply_together(effects);
+            }
+            Command::StreamState(state) => {
+                crate::diag::note(format!("watch: {state}"));
+                let effects = self.together.stream_state(&state);
+                self.apply_together(effects);
+            }
+            Command::StreamAsk => {
+                let effects = self.together.ask();
+                self.apply_together(effects);
+            }
+            Command::StreamLeave => {
+                let effects = self.together.leave();
+                self.apply_together(effects);
+            }
+            Command::MenuOpen(open) => self.menu_open = open,
+            Command::Viewport(width, height) => {
+                self.page_viewport = Some(remote::Viewport { width: f64::from(width), height: f64::from(height) });
+            }
+            Command::ToggleHardwareAcceleration => self.toggle_hardware_acceleration(),
+            Command::SettingsOpen(section) => {
+                if self.settings_panel.show(section, &self.webview, &mut self.web_context, &self.proxy, &self.home_state) {
+                    // Already loaded: straight to the section asked for.
+                    self.push_settings(true);
+                } else {
+                    self.toast(&t!("app.settings_failed"));
+                }
+            }
+            Command::SettingsReady => {
+                self.settings_panel.set_ready();
+                self.push_settings(true);
+            }
+            Command::SettingsClose => self.settings_panel.hide(),
+            Command::Set(setting) => self.set(setting),
+            Command::SettingsLock(mode) => {
+                let current = self.settings.lock;
+                if mode != current {
+                    // The lock screen asks in the player.
+                    self.settings_panel.hide();
+                    // Picking the mode already set turns it off.
+                    self.begin_change(if mode == LockMode::Off { current } else { mode });
+                }
+                self.push_settings(false);
+            }
+            Command::TogetherName(name) => {
+                self.remember_together_name(&name);
+                let effects = self.together.set_name(&self.settings.together_name);
+                self.apply_together(effects);
+                self.push_settings(false);
+            }
+            Command::ShowWelcome => {
+                if let Ok(mut state) = self.home_state.lock() {
+                    state.welcome = true;
+                }
+                self.settings_panel.hide();
+                self.navigate(services::HOME_URL, Agent::Chrome);
+                if self.hidden || self.window.is_minimized() {
+                    self.show();
+                }
+            }
+            Command::WelcomeDone => {
+                if !self.settings.welcome_seen {
+                    self.settings.welcome_seen = true;
+                    self.save_settings();
+                }
+                if let Ok(mut state) = self.home_state.lock() {
+                    state.welcome = false;
+                }
+            }
+            Command::ShowHelp => {
+                self.settings_panel.hide();
+                if self.hidden || self.window.is_minimized() {
+                    self.show();
+                }
+                let _ = self
+                    .webview
+                    .evaluate_script(&format!("window.__ytmpHelp && window.__ytmpHelp(\"{}\")", self.keys.host));
+            }
+            Command::OpenDataFolder => platform::open_path(&self.paths.root),
+            Command::Restart => self.restart(),
         }
         true
     }
 
     // ------------------------------------------------------------------
-    // Servicios
+    // Sharing the window
     // ------------------------------------------------------------------
 
-    /// Navega con el User-Agent indicado (solo se cambia si hace falta).
+    /// A guest's mouse or key on the shared window.
+    fn remote_input(&mut self, member: &str, json: &str) {
+        if !self.together.may_control(member) || self.locked {
+            return;
+        }
+        let now = Instant::now();
+        if !remote::page_allows_input(&self.current_url()) {
+            if self.blocked_notice.is_none_or(|at| now.duration_since(at) >= BLOCKED_NOTICE) {
+                self.blocked_notice = Some(now);
+                self.toast(&t!("together.toast_remote_blocked"));
+            }
+            return;
+        }
+        let viewport = self.page_viewport.or_else(|| self.cast.viewport());
+        let (Some(input), Some(viewport)) = (remote::Input::parse(json), viewport) else { return };
+        let before = self.remote.active(now).map(str::to_owned);
+        match self.remote.translate(member, &input, viewport, self.menu_open, now) {
+            Outcome::Dispatch(calls) => {
+                for (method, params) in calls {
+                    devtools::send(&self.webview, method, &params.to_string());
+                }
+                let fresh = before.as_deref() != Some(member);
+                let due = self.using_notices.get(member).is_none_or(|at| now.duration_since(*at) >= USING_NOTICE);
+                if fresh && due {
+                    self.using_notices.insert(member.to_owned(), now);
+                    if let Some(name) = self.together.member_name(member) {
+                        self.toast(&t!("together.toast_using", name = name));
+                    }
+                }
+            }
+            Outcome::Busy(other) => {
+                if self.busy_notices.get(member).is_none_or(|at| now.duration_since(*at) >= BUSY_NOTICE) {
+                    self.busy_notices.insert(member.to_owned(), now);
+                    let by = self.together.member_name(&other).unwrap_or_default();
+                    self.cast.send(&serde_json::json!({ "t": "busy", "id": member, "by": by }).to_string());
+                }
+            }
+            Outcome::Dropped => {}
+        }
+    }
+
+    /// Whatever a guest holds down on the window is let go.
+    fn release_remote(&mut self, member: &str) {
+        for (method, params) in self.remote.release(member) {
+            devtools::send(&self.webview, method, &params.to_string());
+        }
+    }
+
+    /// Guest: the host's window takes the player's place (the page it was
+    /// on comes back afterwards).
+    fn show_stream(&mut self) {
+        let url = self.current_url();
+        if !is_stream_url(&url) {
+            if !url.is_empty() {
+                self.stream_return = Some(url);
+            }
+            self.navigate(app_webview::STREAM_URL, Agent::Chrome);
+        }
+        if self.hidden || self.window.is_minimized() {
+            self.show();
+        }
+    }
+
+    fn leave_stream(&mut self) {
+        let back = self.stream_return.take();
+        if !is_stream_url(&self.current_url()) {
+            return;
+        }
+        match back.and_then(|u| url::Url::parse(&u).ok()) {
+            Some(url) => self.open_url(url),
+            None => self.navigate(services::HOME_URL, Agent::Chrome),
+        }
+    }
+
+    fn push_stream(&self, json: &str) {
+        let script = format!(
+            "location.origin === 'https://ytmp.localhost' && location.pathname === '/stream' \
+             && window.__ytmpStream && window.__ytmpStream(\"{}\", {json})",
+            self.keys.host
+        );
+        let _ = self.webview.evaluate_script(&script);
+    }
+
+    // ------------------------------------------------------------------
+    // Hardware acceleration
+    // ------------------------------------------------------------------
+
+    /// WebView2 takes it only when it starts: offers to restart now.
+    fn toggle_hardware_acceleration(&mut self) {
+        self.settings.hardware_acceleration = !self.settings.hardware_acceleration;
+        self.save_settings();
+        self.state_changed();
+        let question = Question {
+            title: &t!("dialog.restart_title"),
+            heading: &if self.settings.hardware_acceleration {
+                t!("dialog.restart_gpu_on")
+            } else {
+                t!("dialog.restart_gpu_off")
+            },
+            text: &t!("dialog.restart_text"),
+            yes: &t!("dialog.restart_now"),
+            no: &t!("dialog.restart_later"),
+        };
+        if !security::ask(self.dialog_owner(), &question) {
+            self.toast(&t!("app.applies_on_restart"));
+            return;
+        }
+        self.restart();
+    }
+
+    /// Opens a new copy (which waits for this one) and quits.
+    fn restart(&mut self) {
+        match platform::relaunch() {
+            Ok(()) => {
+                let _ = self.proxy.send_event(UserEvent::Command(Command::Quit));
+            }
+            Err(err) => self.toast(&t!("app.restart_failed", error = err)),
+        }
+    }
+
+    /// A setting set from the Settings window: only what differs changes
+    /// (the same paths as the side bar and the tray, with their notices).
+    fn set(&mut self, setting: Setting) {
+        let command = match setting {
+            Setting::AlwaysOnTop(on) => (self.settings.always_on_top != on).then_some(Command::TogglePin),
+            Setting::Ghost(on) => (self.ghost != on).then_some(Command::ToggleGhost),
+            Setting::VideoOnly(on) => (self.settings.video_only != on).then_some(Command::ToggleVideoOnly),
+            Setting::FullscreenInWindow(on) => {
+                if self.settings.fullscreen_in_window != on {
+                    self.settings.fullscreen_in_window = on;
+                    self.save_settings();
+                    self.push_state();
+                }
+                None
+            }
+            Setting::TaskbarBar(on) => (self.settings.taskbar_bar != on).then_some(Command::ToggleTaskbarBar),
+            Setting::Autostart(on) => (self.autostart != on).then_some(Command::ToggleAutostart),
+            Setting::StartWithLast(on) => Some(Command::SetStartWithLast(on)),
+            Setting::HardwareAcceleration(on) => {
+                // The window says it applies on restart and offers to do
+                // it (no dialog on top of it).
+                if self.settings.hardware_acceleration != on {
+                    self.settings.hardware_acceleration = on;
+                    self.save_settings();
+                    self.state_changed();
+                }
+                None
+            }
+        };
+        if let Some(command) = command {
+            self.handle(command);
+        }
+        // Also when nothing changed: the window shows the real state.
+        self.push_settings(false);
+    }
+
+    /// Dialogs open above the Settings window when it is showing.
+    fn dialog_owner(&self) -> isize {
+        #[cfg(windows)]
+        {
+            if self.settings_panel.visible() {
+                return self.settings_panel.hwnd();
+            }
+        }
+        self.hwnd()
+    }
+
+    /// The Settings window's state (only if it is showing, unless `force`,
+    /// and only when something changed).
+    fn push_settings(&self, force: bool) {
+        if !self.settings_panel.loaded() || (!force && !self.settings_panel.visible()) {
+            return;
+        }
+        let section = self.settings_panel.take_section();
+        let view = SettingsView {
+            version: env!("CARGO_PKG_VERSION"),
+            webview: &self.webview_version,
+            section: section.map(|s| s.id()),
+            pinned: self.settings.always_on_top,
+            opacity: self.settings.opacity,
+            ghost: self.ghost,
+            video_only: self.settings.video_only,
+            fullscreen_in_window: self.settings.fullscreen_in_window,
+            taskbar_bar: self.settings.taskbar_bar,
+            autostart: self.autostart,
+            start_with_last: self.settings.start_with_last,
+            tray: self.tray.is_some(),
+            hardware_acceleration: self.settings.hardware_acceleration,
+            hardware_acceleration_now: self.gpu_at_start,
+            lock: self.settings.lock,
+            overlay: self.overlay,
+            together_name: &self.settings.together_name,
+            together_mode: if self.settings.together_share { Mode::Share } else { Mode::Sync },
+            together_active: self.together.is_active(),
+            extensions: &self.extensions,
+            extension_problems: &self.extension_problems,
+            extensions_error: self.extensions_error.as_deref(),
+            hotkeys: self.hotkeys.views(),
+        };
+        let Ok(json) = serde_json::to_string(&view) else { return };
+        if !force && section.is_none() && *self.settings_shown.borrow() == json {
+            return;
+        }
+        self.settings_panel.push(&json);
+        *self.settings_shown.borrow_mut() = json;
+    }
+
+    // ------------------------------------------------------------------
+    // Watch together
+    // ------------------------------------------------------------------
+
+    /// The address the player is on (the webview's own, not the page's say).
+    fn current_url(&self) -> String {
+        self.webview.url().unwrap_or_default()
+    }
+
+    fn remember_together_name(&mut self, name: &str) {
+        let name = together::protocol::clean_name(name);
+        if self.settings.together_name != name {
+            self.settings.together_name = name;
+            self.save_settings();
+        }
+    }
+
+    fn apply_together(&mut self, effects: Vec<together::Effect>) {
+        for effect in effects {
+            match effect {
+                together::Effect::Media(action) => {
+                    let _ = self.webview.evaluate_script(&action.script());
+                }
+                together::Effect::Navigate(url) => {
+                    if !self.locked {
+                        self.open_url(url);
+                    }
+                }
+                together::Effect::Toast(text) => self.toast(&text),
+                together::Effect::Panel(json) => self.panel.push(&json),
+                together::Effect::Share(true) => {
+                    crate::diag::note("share: on");
+                    if !self.cast.start(&self.webview, &mut self.web_context, &self.proxy, &self.home_state) {
+                        self.toast(&t!("together.share_failed"));
+                    }
+                    self.update_lifecycle();
+                }
+                together::Effect::Share(false) => {
+                    crate::diag::note("share: off");
+                    for (method, params) in self.remote.release_all() {
+                        devtools::send(&self.webview, method, &params.to_string());
+                    }
+                    self.cast.stop();
+                    self.update_lifecycle();
+                }
+                together::Effect::Cast(json) => self.cast.send(&json),
+                together::Effect::Watch(true) => {
+                    crate::diag::note("watch: showing the host's window");
+                    self.show_stream();
+                }
+                together::Effect::Watch(false) => {
+                    crate::diag::note("watch: back to the own page");
+                    self.leave_stream();
+                }
+                together::Effect::Stream(json) => self.push_stream(&json),
+            }
+        }
+        // A session started or ended: the page reports every second (or
+        // stops), and the side bar and tray say so.
+        self.sync_watch();
+        let shown = self.together.is_active().then(|| if self.together.is_host() { "host" } else { "guest" });
+        if shown != self.together_shown {
+            self.together_shown = shown;
+            self.push_state();
+            self.update_tray();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Language
+    // ------------------------------------------------------------------
+
+    /// Switches the whole interface: tray, side bar, the app's pages (which
+    /// redraw in place, so My music keeps playing), the music bar and the
+    /// lock screen. The choice is remembered.
+    fn set_language(&mut self, lang: Lang) {
+        let changed = i18n::current() != lang;
+        let not_approved = t!("app.extension_not_approved");
+        i18n::set(lang);
+        if self.settings.language.as_deref() != Some(lang.code()) {
+            self.settings.language = Some(lang.code().to_owned());
+            self.save_settings();
+        }
+        // Also puts the tray's check mark back if the same language was picked.
+        self.update_tray();
+        if changed {
+            self.relocalize_extensions(&not_approved);
+            self.mini.relocalize();
+            self.lock_view.relocalize();
+            self.panel.relocalize();
+            self.settings_panel.relocalize();
+            self.push_locale();
+            self.push_state();
+        }
+    }
+
+    /// The extension texts the app wrote (problems, names taken from
+    /// `_locales`, "not approved") in the new language. Errors that come from
+    /// WebView2 keep its wording.
+    fn relocalize_extensions(&mut self, old_not_approved: &str) {
+        let scan = extensions::scan(&self.paths.extensions);
+        self.extension_problems = scan.problems;
+        let not_approved = t!("app.extension_not_approved");
+        for status in &mut self.extensions {
+            if let Some(ext) = scan.extensions.iter().find(|e| e.folder == status.folder) {
+                status.name = ext.name.clone();
+            }
+            if status.error.as_deref() == Some(old_not_approved) {
+                status.error = Some(not_approved.clone());
+            }
+        }
+    }
+
+    /// Strings for the scripts in the main webview: the side bar's, plus the
+    /// page's own when it is the start screen or My music.
+    fn push_locale(&self) {
+        let path = self
+            .webview
+            .url()
+            .ok()
+            .and_then(|u| url::Url::parse(&u).ok())
+            .filter(|u| u.host_str() == Some(services::HOME_HOST))
+            .map(|u| u.path().to_owned());
+        let locale = Locale {
+            info: i18n::language_info(),
+            ui: i18n::page_strings(crate::home::UI_STRINGS),
+            page: path.as_deref().and_then(crate::home::strings_for_path),
+        };
+        if let Ok(json) = serde_json::to_string(&locale) {
+            let _ = self
+                .webview
+                .evaluate_script(&format!("window.__ytmpLocale && window.__ytmpLocale(\"{}\", {json})", self.keys.host));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Services
+    // ------------------------------------------------------------------
+
+    /// Navigates with the given User-Agent (changed only if needed).
     fn navigate(&mut self, url: &str, agent: Agent) {
         if self.fullscreen {
             self.set_fullscreen(false);
@@ -717,10 +1523,10 @@ impl App {
             self.current_agent = agent;
         }
         if let Err(err) = self.webview.load_url(url) {
-            self.toast(&format!("No se pudo abrir la página: {err}"));
+            self.toast(&t!("app.open_failed", error = err));
         }
-        // Lo que sonaba se va con la página; la nueva lo informará (la
-        // pantalla de inicio no informa nada).
+        // What was playing leaves with the page; the new one will report
+        // (the start screen reports nothing).
         self.media = MediaState::default();
         self.update_tray();
         self.refresh_bar();
@@ -731,8 +1537,8 @@ impl App {
         self.navigate(service.url, service.agent);
     }
 
-    /// Una dirección concreta: si es de un servicio, con su User-Agent y
-    /// recordándolo; si no, como Edge, que es lo que el motor es.
+    /// A specific address: if it belongs to a service, with its User-Agent
+    /// and remembering it; otherwise as Edge, which is what the engine is.
     fn open_url(&mut self, url: url::Url) {
         let agent = match services::for_url(&url) {
             Some(service) => {
@@ -760,7 +1566,7 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Ventana
+    // Window
     // ------------------------------------------------------------------
 
     #[cfg(windows)]
@@ -782,7 +1588,7 @@ impl App {
         }
     }
 
-    /// Reaplica opacidad y modo fantasma (tao los borra al cambiar estilos).
+    /// Re-applies opacity and ghost mode (tao clears them when it changes styles).
     fn apply_effects(&self) {
         platform::apply_window_effects(self.hwnd(), self.effective_opacity(), self.ghost);
     }
@@ -799,14 +1605,14 @@ impl App {
             return;
         }
         self.fullscreen = on;
-        // `None` = el monitor donde está la ventana.
+        // `None` = the monitor the window is on.
         self.window.set_fullscreen(on.then_some(Fullscreen::Borderless(None)));
         self.apply_effects();
         self.push_state();
     }
 
     fn show(&mut self) {
-        // La barra pedida a petición se va; la de un servicio de música sigue.
+        // The bar shown on request goes away; a music service's bar stays.
         self.mini.end_transient();
         self.refresh_bar();
         self.hidden = false;
@@ -820,7 +1626,7 @@ impl App {
         self.update_tray();
         self.hidden_since = None;
         if self.locked {
-            // Al traerla al frente bloqueada, se pide Windows Hello directamente.
+            // Brought to the front while locked: ask for Windows Hello right away.
             self.show_lock_view();
             if self.lock_method() == LockMode::Hello {
                 self.start_hello();
@@ -830,7 +1636,7 @@ impl App {
 
     fn hide(&mut self) {
         if self.tray.is_none() {
-            // Sin bandeja, ocultar dejaría la ventana inaccesible.
+            // Without a tray, hiding would leave the window unreachable.
             self.window.set_minimized(true);
             return;
         }
@@ -845,11 +1651,12 @@ impl App {
     }
 
     fn update_lifecycle(&mut self) {
-        let background = self.hidden || self.window.is_minimized();
+        // While the window is shared it keeps drawing, even minimized.
+        let background = (self.hidden || self.window.is_minimized()) && !self.cast.active();
         self.lifecycle.update(&self.webview, background);
     }
 
-    /// Tras cambiar de tamaño, vuelve a meter la ventana en la pantalla.
+    /// After a resize, puts the window back on the screen.
     fn keep_inside_work_area(&self) {
         let (Some(area), Ok(pos)) = (platform::work_area(self.hwnd()), self.window.outer_position()) else {
             return;
@@ -863,7 +1670,7 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Extensiones
+    // Extensions
     // ------------------------------------------------------------------
 
     fn reload_extensions(&mut self) {
@@ -876,7 +1683,7 @@ impl App {
                 let mut status = ExtensionStatus::pending(ext);
                 if !approved.iter().any(|a| a.folder == ext.folder) {
                     status.pending = false;
-                    status.error = Some("No aprobada: no se carga. Pulsa «Recargar» para volver a decidir.".into());
+                    status.error = Some(t!("app.extension_not_approved"));
                 }
                 status
             })
@@ -889,18 +1696,18 @@ impl App {
                 status.error = Some(error.clone());
             }
         } else {
-            // Las no aprobadas quedan fuera (y se desinstalan si estaban).
+            // The ones not approved stay out (and are uninstalled if they were in).
             self.ext_host.sync(approved, self.extension_ids.clone());
         }
         self.push_state();
     }
 
-    /// Solo se cargan extensiones aprobadas por el usuario con su huella
-    /// exacta. Las nuevas o modificadas se preguntan en un diálogo del
-    /// sistema (que la página no puede dibujar ni pulsar).
+    /// Only extensions the user approved, with their exact fingerprint, are
+    /// loaded. New or changed ones are asked about in a system dialog (which
+    /// the page can neither draw nor press).
     fn approve_extensions(&mut self, found: &[LocalExtension]) -> Vec<LocalExtension> {
         let mut changed = false;
-        // Se olvidan las carpetas que ya no existen.
+        // Folders that no longer exist are forgotten.
         let folders: Vec<&str> = found.iter().map(|e| e.folder.as_str()).collect();
         for list in [&mut self.settings.approved_extensions, &mut self.settings.rejected_extensions] {
             let before = list.len();
@@ -917,12 +1724,20 @@ impl App {
                 continue;
             }
             if self.locked {
-                // Se pregunta al desbloquear.
+                // Asked when unlocked.
                 self.approvals_pending = true;
                 continue;
             }
             let was_approved = self.settings.approved_extensions.contains_key(&ext.folder);
-            if security::confirm(self.hwnd(), "Extensión nueva o modificada", &extension_question(ext, was_approved)) {
+            let (heading, text) = extension_question(ext, was_approved);
+            let question = Question {
+                title: &t!("dialog.extension_title"),
+                heading: &heading,
+                text: &text,
+                yes: &t!("dialog.extension_load"),
+                no: &t!("dialog.extension_skip"),
+            };
+            if security::ask(self.hwnd(), &question) {
                 self.settings.rejected_extensions.remove(&ext.folder);
                 self.settings.approved_extensions.insert(ext.folder.clone(), ext.fingerprint.clone());
                 approved.push(ext.clone());
@@ -958,17 +1773,17 @@ impl App {
                         status.pending = false;
                         status.error = Some(error);
                     }
-                    None => self.toast(&format!("Extensión: {error}")),
+                    None => self.toast(&t!("app.extension_failed", error = error)),
                 }
             }
             ExtensionEvent::Toggled { id, enabled } => {
                 if let Some(status) = self.extensions.iter_mut().find(|s| s.id.as_deref() == Some(id.as_str())) {
                     status.enabled = enabled;
-                    let message = format!(
-                        "{} {}. Recarga la página (F5) para aplicarlo.",
-                        status.name,
-                        if enabled { "activada" } else { "desactivada" }
-                    );
+                    let message = if enabled {
+                        t!("app.extension_on", name = status.name)
+                    } else {
+                        t!("app.extension_off", name = status.name)
+                    };
                     self.toast(&message);
                 }
             }
@@ -980,9 +1795,7 @@ impl App {
                 }
             }
             ExtensionEvent::Unsupported(error) => {
-                let message = format!(
-                    "Este runtime de WebView2 no admite extensiones ({error}). Actualiza Microsoft Edge WebView2."
-                );
+                let message = t!("app.extensions_unsupported", error = error);
                 for status in &mut self.extensions {
                     status.pending = false;
                     status.error = Some(message.clone());
@@ -994,37 +1807,34 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Persistencia y página
+    // Persistence and page
     // ------------------------------------------------------------------
 
     fn save_settings(&self) {
         if let Err(err) = self.settings.save(&self.store, &self.paths.settings) {
-            eprintln!("no se pudieron guardar los ajustes: {err}");
+            eprintln!("could not save the settings: {err}");
         }
     }
 
     fn save_extension_ids(&self) {
         if let Err(err) = config::save_extension_ids(&self.store, &self.paths.extension_ids, &self.extension_ids) {
-            eprintln!("no se pudo guardar extensions.enc: {err}");
+            eprintln!("could not save extensions.enc: {err}");
         }
         if let Ok(mut allowed) = self.allowed_extensions.lock() {
             *allowed = self.extension_ids.values().cloned().collect();
         }
     }
 
-    /// tao termina el proceso con `exit()` sin ejecutar destructores, así
-    /// que aquí se guarda todo y se quita el icono de la bandeja (si no,
-    /// quedaría un icono fantasma hasta pasar el ratón por encima).
     fn on_music(&mut self, request: crate::music::Request) {
         use crate::music::{os, Request};
         let Some(music) = &self.music else {
-            self.toast("La música no está disponible");
+            self.toast(&t!("app.music_unavailable"));
             return;
         };
         match request {
-            // El diálogo del sistema va en el hilo de la ventana (modal).
+            // The system dialog runs on the window's thread (modal).
             Request::PickFolder => {
-                if let Some(path) = os::pick_folder(self.hwnd(), "Elige la carpeta con tu música") {
+                if let Some(path) = os::pick_folder(self.hwnd(), &t!("music.pick_folder_title")) {
                     music.request(Request::Import(path));
                 }
             }
@@ -1032,15 +1842,21 @@ impl App {
         }
     }
 
+    /// tao ends the process with `exit()` without running destructors, so
+    /// everything is saved here and the tray icon removed (otherwise a ghost
+    /// icon would stay until the mouse passes over it).
     fn save_on_exit(&mut self) {
-        // La biblioteca se guarda (y las descargas se detienen) antes de salir.
+        // The others are told (the host's guests see "ended" at once).
+        self.together.shutdown();
+        self.cast.stop();
+        // The library is saved (and downloads stopped) before quitting.
         if let Some(music) = &self.music {
             music.shutdown(Duration::from_secs(3));
         }
         if !self.fullscreen {
             if let Some(geometry) = app_window::current_geometry(&self.window) {
                 if let Err(err) = geometry.save(&self.store, &self.paths.window_state) {
-                    eprintln!("no se pudo guardar la geometría: {err}");
+                    eprintln!("could not save the window geometry: {err}");
                 }
             }
         }
@@ -1048,10 +1864,10 @@ impl App {
         topmost::set_active(false);
         self.mini.close();
         self.tray = None;
+        crate::diag::finish();
     }
 
-    /// El vigilante solo trabaja con "siempre visible" activo y la ventana
-    /// a la vista.
+    /// The guard only works with "always on top" on and the window showing.
     fn update_guard(&self) {
         topmost::set_active(self.settings.always_on_top && !self.hidden);
     }
@@ -1059,7 +1875,7 @@ impl App {
     fn update_tray(&self) {
         self.update_guard();
         if let Some(tray) = &self.tray {
-            // Bloqueada, la bandeja no cuenta qué suena.
+            // While locked, the tray does not tell what is playing.
             let media = if self.locked { MediaState::default() } else { self.media.clone() };
             tray.update(&TrayState {
                 visible: !self.hidden,
@@ -1075,30 +1891,34 @@ impl App {
                 can_previous: media.can_previous,
                 now_playing: crate::media::truncate(&media.title, crate::tray::MENU_TITLE_CHARS),
                 tooltip: media.tooltip(),
+                language: i18n::current(),
+                together: self.together.is_active(),
+                hardware_acceleration: self.settings.hardware_acceleration,
             });
         }
+        self.push_settings(false);
     }
 
     // ------------------------------------------------------------------
-    // Reproducción y barra de música
+    // Playback and music bar
     // ------------------------------------------------------------------
 
     fn media_action(&mut self, action: MediaAction) {
         let _ = self.webview.evaluate_script(&action.script());
         if self.hidden || self.window.is_minimized() {
-            // Oculto: la barra aparece unos segundos como aviso, sin quitarle
-            // el foco a nada.
+            // Hidden: the bar appears for a few seconds as feedback, without
+            // taking the focus from anything.
             self.open_bar(mini::STAY_AFTER_HOTKEY, None);
             return;
         }
-        // Visible: un aviso breve para lo que no se ve a simple vista.
+        // Showing: a short notice for what is not obvious at a glance.
         let percent = |delta: i16| (i16::from(self.media.volume_percent()) + delta).clamp(0, 100);
         let message = match action {
-            MediaAction::VolumeBy(delta) => Some(format!("Volumen {} %", percent(i16::from(delta)))),
-            MediaAction::ToggleMute if self.media.muted => Some("Sonido activado".to_owned()),
-            MediaAction::ToggleMute => Some("Silenciado".to_owned()),
-            MediaAction::SeekBy(s) if s > 0 => Some(format!("+{s} s")),
-            MediaAction::SeekBy(s) => Some(format!("−{} s", s.unsigned_abs())),
+            MediaAction::VolumeBy(delta) => Some(t!("app.volume", value = percent(i16::from(delta)))),
+            MediaAction::ToggleMute if self.media.muted => Some(t!("app.unmuted")),
+            MediaAction::ToggleMute => Some(t!("app.muted")),
+            MediaAction::SeekBy(s) if s > 0 => Some(t!("app.seek_forward", seconds = s)),
+            MediaAction::SeekBy(s) => Some(t!("app.seek_back", seconds = s.unsigned_abs())),
             _ => None,
         };
         if let Some(message) = message {
@@ -1108,16 +1928,16 @@ impl App {
         }
     }
 
-    /// Crea el webview de la barra si aún no existe.
+    /// Creates the bar's webview if it does not exist yet.
     fn prepare_bar(&mut self) -> bool {
         self.mini.ensure_webview(&self.webview, &mut self.web_context, &self.proxy, &self.home_state)
     }
 
-    /// Recalcula la barra: fija si hay un servicio de música abierto (y no
-    /// se cerró a mano), y dónde y si se ve.
+    /// Works out the bar: pinned if a music service is open (and it was not
+    /// closed by hand), and where and whether it shows.
     fn refresh_bar(&mut self) {
         let source = services::music_source(&self.media.site);
-        // Bloqueada: nada de barra (mostraría lo que suena).
+        // Locked: no bar (it would show what is playing).
         if self.locked {
             self.mini.set_pinned(false);
             self.mini.close();
@@ -1129,8 +1949,8 @@ impl App {
             pinned = false;
         }
         self.mini.set_pinned(pinned);
-        // Fuera del catálogo y de los sitios de música conocidos, la barra
-        // muestra el dominio: así no puede hacerse pasar por otra cosa.
+        // Outside the catalog and the known music sites, the bar shows the
+        // domain: so it cannot pass itself off as something else.
         let known = source.is_some()
             || url::Url::parse(&format!("https://{}/", self.media.site)).ok().and_then(|u| services::for_url(&u)).is_some();
         let origin = (!known && !self.media.site.is_empty()).then(|| self.media.site.clone());
@@ -1139,10 +1959,10 @@ impl App {
         self.sync_watch();
     }
 
-    /// La muestra a petición unos segundos (clic en la bandeja, atajos).
+    /// Shows it on request for a few seconds (tray click, shortcuts).
     fn open_bar(&mut self, stay: Duration, anchor: Option<(i32, i32)>) {
         if !self.prepare_bar() {
-            self.toast("No se pudo abrir la barra de controles");
+            self.toast(&t!("app.bar_failed"));
             return;
         }
         self.bar_dismissed = false;
@@ -1150,7 +1970,7 @@ impl App {
         self.refresh_bar();
     }
 
-    /// Clic derecho en la barra (o clic en la bandeja con la barra abierta).
+    /// Right click on the bar (or a tray click with the bar open).
     fn close_bar(&mut self) {
         if self.mini.is_pinned() {
             self.bar_dismissed = true;
@@ -1159,11 +1979,12 @@ impl App {
         self.refresh_bar();
     }
 
-    /// Mientras la barra se ve, la página informa la posición cada segundo.
-    /// El informe dice si la página está en ese modo: si no coincide (página
-    /// nueva, recarga), se le vuelve a pedir.
+    /// While the bar shows, the page reports the position every second. The
+    /// report says whether the page is in that mode: if it does not match
+    /// (new page, reload), it is asked again.
     fn sync_watch(&mut self) {
-        let wanted = self.mini.is_visible();
+        // Watch together needs the position every second too.
+        let wanted = self.mini.is_visible() || self.together.is_active();
         if self.media.watching != wanted {
             self.media.watching = wanted;
             let script = format!("window.__ytmpMediaWatch && window.__ytmpMediaWatch({wanted})");
@@ -1171,16 +1992,15 @@ impl App {
         }
     }
 
-    /// Próximo momento en que hay algo que hacer (revisar la barra).
+    /// Next moment there is something to do (check the bar).
     pub fn deadline(&self) -> Option<Instant> {
-        let auto_lock = self.auto_lock_at();
-        match (self.mini.deadline(), auto_lock) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [self.mini.deadline(), self.auto_lock_at(), self.together.deadline(), self.cast.sound_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
-    /// Cuándo se bloquea sola por llevar oculta mucho tiempo.
+    /// When it locks itself for having been hidden a long time.
     fn auto_lock_at(&self) -> Option<Instant> {
         let enabled = self.settings.lock != LockMode::Off && !self.locked;
         self.hidden_since.filter(|_| enabled).map(|since| since + LOCK_AFTER_HIDDEN)
@@ -1189,6 +2009,18 @@ impl App {
     pub fn on_timer(&mut self) {
         let now = Instant::now();
         self.mini.on_timer(now);
+        if self.together.deadline().is_some_and(|at| now >= at) {
+            let effects = self.together.on_timer();
+            self.apply_together(effects);
+        }
+        if self.cast.sound_deadline().is_some_and(|at| now >= at) {
+            // Is the shared sound heard while the page plays?
+            let webview = &self.webview;
+            if let Some(sound) = self.cast.check_sound(now, || devtools::playing_audio(webview)) {
+                let effects = self.together.set_sound(sound);
+                self.apply_together(effects);
+            }
+        }
         self.sync_watch();
         if self.auto_lock_at().is_some_and(|at| now >= at) {
             self.lock_now();
@@ -1203,6 +2035,14 @@ impl App {
         self.mini.id()
     }
 
+    pub fn together_window_id(&self) -> tao::window::WindowId {
+        self.panel.id()
+    }
+
+    pub fn settings_window_id(&self) -> tao::window::WindowId {
+        self.settings_panel.id()
+    }
+
     fn state_changed(&self) {
         self.update_tray();
         self.push_state();
@@ -1213,6 +2053,7 @@ impl App {
             version: env!("CARGO_PKG_VERSION"),
             pinned: self.settings.always_on_top,
             video_only: self.settings.video_only,
+            fullscreen_in_window: self.settings.fullscreen_in_window,
             opacity: self.settings.opacity,
             ghost: self.ghost,
             fullscreen: self.fullscreen,
@@ -1221,16 +2062,19 @@ impl App {
             extensions: &self.extensions,
             extension_problems: &self.extension_problems,
             extensions_error: self.extensions_error.as_deref(),
-            hotkeys: &self.hotkeys.shortcuts,
+            hotkeys: self.hotkeys.views(),
             last_service: self.settings.last_service.as_deref(),
             start_with_last: self.settings.start_with_last,
             overlay: self.overlay,
+            together: self.together_shown,
+            hardware_acceleration: self.settings.hardware_acceleration,
         };
         if let Ok(json) = serde_json::to_string(&state) {
             let _ = self
                 .webview
                 .evaluate_script(&format!("window.__ytmpSync && window.__ytmpSync(\"{}\", {json})", self.keys.host));
         }
+        self.push_settings(false);
     }
 
     fn toast(&self, message: &str) {
@@ -1242,10 +2086,10 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Bloqueo de la app
+    // App lock
     // ------------------------------------------------------------------
 
-    /// Método con el que se verifica ahora (en el paso actual).
+    /// The method used to verify now (at the current step).
     fn lock_method(&self) -> LockMode {
         match self.flow.map(|f| f.stage) {
             Some(Stage::NewPin) => LockMode::Pin,
@@ -1261,8 +2105,13 @@ impl App {
         self.locked = true;
         self.flow = Some(Flow { goal: Goal::Unlock, stage: Stage::Verify });
         self.lock_error = None;
-        // Que no siga sonando ni se vea lo que había.
+        // Nothing keeps playing or stays on screen (watch together included:
+        // nothing plays behind the lock screen, and its window hides).
         let _ = self.webview.evaluate_script(&MediaAction::Pause.script());
+        self.panel.hide();
+        self.settings_panel.hide();
+        let effects = self.together.set_locked(true);
+        self.apply_together(effects);
         if self.ghost {
             self.ghost = false;
             self.apply_effects();
@@ -1273,12 +2122,12 @@ impl App {
         let _ = self.webview.set_visible(false);
         self.refresh_bar();
         if !self.show_lock_view() {
-            // Sin pantalla de bloqueo no habría forma de desbloquear: antes
-            // que dejar la app inutilizable, no se bloquea y se avisa.
+            // Without a lock screen there would be no way to unlock: rather
+            // than leaving the app unusable, it does not lock and says so.
             self.locked = false;
             self.flow = None;
             let _ = self.webview.set_visible(true);
-            self.toast("No se pudo mostrar la pantalla de bloqueo; la app sigue desbloqueada.");
+            self.toast(&t!("app.lock_screen_failed"));
         }
         self.update_tray();
     }
@@ -1293,9 +2142,10 @@ impl App {
         ready
     }
 
-    /// PIN olvidado: se puede quitar verificándose con Windows Hello (la
-    /// identidad la confirma Windows). Si Windows Hello no está, la única
-    /// salida es borrar las sesiones: quien no sepa el PIN no se lleva nada.
+    /// Forgotten PIN: it can be removed by verifying with Windows Hello
+    /// (Windows confirms the identity). Without Windows Hello, the only way
+    /// out is clearing the sessions: whoever does not know the PIN takes
+    /// nothing away.
     fn forgot_pin(&mut self) {
         if !self.locked || self.settings.lock != LockMode::Pin || self.hello_busy || self.pin_busy {
             return;
@@ -1305,26 +2155,26 @@ impl App {
         self.push_lock_screen();
         let hwnd = self.hwnd();
         let proxy = self.proxy.clone();
+        let message = t!("lock.hello_prompt_forgot");
         std::thread::spawn(move || {
-            let result = lock::hello_verify(hwnd, "Verifícate para quitar el PIN de YT Mini Player");
+            let result = lock::hello_verify(hwnd, &message);
             let _ = proxy.send_event(UserEvent::Command(Command::ForgotResult(result)));
         });
     }
 
     fn reset_forgotten_pin(&mut self) {
-        let confirmed = security::confirm(
-            self.hwnd(),
-            "PIN olvidado",
-            "Windows Hello no está disponible para verificarte.\n\n\
-             Para quitar el PIN hay que cerrar la sesión en todos los servicios (se borran cookies, \
-             datos de los sitios, caché e historial). Así nadie que no sepa el PIN se lleva tus cuentas.\n\n\
-             ¿Borrar las sesiones y quitar el PIN?",
-        );
-        if !confirmed {
+        let question = Question {
+            title: &t!("dialog.forgot_title"),
+            heading: &t!("dialog.forgot_heading"),
+            text: &t!("dialog.forgot_text"),
+            yes: &t!("dialog.forgot_confirm"),
+            no: &t!("common.cancel"),
+        };
+        if !security::ask(self.hwnd(), &question) {
             self.push_lock_screen();
             return;
         }
-        // El PIN se quita solo cuando el borrado termine bien.
+        // The PIN is only removed once clearing has succeeded.
         self.pin_reset_pending = true;
         let proxy = self.proxy.clone();
         app_webview::clear_browsing_data(&self.webview, move |ok| {
@@ -1355,8 +2205,8 @@ impl App {
         });
     }
 
-    /// Cambiar el modo de bloqueo (desde la bandeja). Elegir el modo que ya
-    /// está lo desactiva. Si hay bloqueo, primero hay que verificarse.
+    /// Change the lock mode (from the tray). Picking the mode already set
+    /// turns it off. If there is a lock, the user must verify first.
     fn begin_change(&mut self, chosen: LockMode) {
         let target = if chosen == self.settings.lock { LockMode::Off } else { chosen };
         if target == LockMode::Off && self.settings.lock == LockMode::Off {
@@ -1392,13 +2242,9 @@ impl App {
         self.push_lock_screen();
         let hwnd = self.hwnd();
         let proxy = self.proxy.clone();
-        let message = if flow.goal == Goal::Unlock {
-            "Desbloquear YT Mini Player"
-        } else {
-            "Confirma que eres tú para cambiar el bloqueo de YT Mini Player"
-        };
+        let message = if flow.goal == Goal::Unlock { t!("lock.hello_prompt_unlock") } else { t!("lock.hello_prompt_change") };
         std::thread::spawn(move || {
-            let result = lock::hello_verify(hwnd, message);
+            let result = lock::hello_verify(hwnd, &message);
             let _ = proxy.send_event(UserEvent::Command(Command::HelloResult(result)));
         });
     }
@@ -1428,7 +2274,7 @@ impl App {
             return;
         }
         if let Err(reason) = lock::check_pin(&pin) {
-            self.lock_failed(reason);
+            self.lock_failed(&i18n::text(reason));
             return;
         }
         self.pin_busy = true;
@@ -1441,7 +2287,7 @@ impl App {
         });
     }
 
-    /// Verificación correcta: sigue el paso siguiente.
+    /// Verification succeeded: on to the next step.
     fn verified(&mut self) {
         let Some(flow) = self.flow else { return };
         self.lock_error = None;
@@ -1478,10 +2324,13 @@ impl App {
         if !self.locked {
             self.end_flow();
         }
-        self.toast(match mode {
-            LockMode::Off => "Bloqueo desactivado",
-            LockMode::Hello => "Bloqueo con Windows Hello activado. Ctrl+Alt+L para bloquear ahora.",
-            LockMode::Pin => "Bloqueo con PIN activado. Ctrl+Alt+L para bloquear ahora.",
+        let keys = self.hotkeys.keys_for(Action::Lock);
+        self.toast(&match (mode, keys) {
+            (LockMode::Off, _) => t!("app.lock_off"),
+            (LockMode::Hello, Some(keys)) => t!("app.lock_hello_on", keys = keys),
+            (LockMode::Hello, None) => t!("app.lock_hello_on_tray"),
+            (LockMode::Pin, Some(keys)) => t!("app.lock_pin_on", keys = keys),
+            (LockMode::Pin, None) => t!("app.lock_pin_on_tray"),
         });
     }
 
@@ -1499,6 +2348,8 @@ impl App {
 
     fn unlock(&mut self) {
         self.locked = false;
+        let effects = self.together.set_locked(false);
+        self.apply_together(effects);
         self.end_flow();
         self.hidden_since = if self.hidden { Some(Instant::now()) } else { None };
         self.refresh_bar();
@@ -1509,20 +2360,20 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Cuentas y estado de la protección
+    // Accounts and protection status
     // ------------------------------------------------------------------
 
-    /// Cierra la sesión en todos los servicios: borra cookies, almacenamiento
-    /// y caché del perfil (tras confirmarlo en un diálogo del sistema).
+    /// Signs out of every service: clears cookies, storage and the profile
+    /// cache (after confirming in a system dialog).
     fn sign_out_all(&mut self) {
-        let confirmed = security::confirm(
-            self.hwnd(),
-            "Cerrar sesión en todos los servicios",
-            "Se borrarán las sesiones (cookies), el almacenamiento de los sitios, la caché y el historial \
-             del reproductor. Tendrás que volver a iniciar sesión en YouTube, Netflix y el resto.\n\n\
-             Los ajustes de la app y las extensiones se conservan.\n\n¿Continuar?",
-        );
-        if !confirmed {
+        let question = Question {
+            title: &t!("dialog.sign_out_title"),
+            heading: &t!("dialog.sign_out_heading"),
+            text: &t!("dialog.sign_out_text"),
+            yes: &t!("dialog.sign_out_confirm"),
+            no: &t!("common.cancel"),
+        };
+        if !security::ask(self.dialog_owner(), &question) {
             return;
         }
         let proxy = self.proxy.clone();
@@ -1532,66 +2383,65 @@ impl App {
     }
 
     fn show_security_status(&self) {
-        let lock = match self.settings.lock {
-            LockMode::Off => "desactivado (bandeja → Ajustes → Seguridad)",
-            LockMode::Hello => "Windows Hello; se bloquea al bloquear Windows, al suspender y tras 10 min oculta",
-            LockMode::Pin => "PIN (hash Argon2id); se bloquea al bloquear Windows, al suspender y tras 10 min oculta",
+        let key = match crate::vault::key_protection(&self.paths.vault_key) {
+            Some(crate::vault::KeyProtection::DeviceAndAccount) => t!("security.key_tpm"),
+            _ if crate::vault::hardware_protector().is_some() => t!("security.key_tpm_pending"),
+            _ => t!("security.key_no_tpm"),
         };
-        let approved = self.settings.approved_extensions.len();
-        let text = format!(
-            "Contraseñas: la app no las ve ni las guarda. Inicias sesión en la página de cada servicio y el \
-             guardado de contraseñas y el autorrelleno del motor están desactivados.\n\n\
-             Sesiones (cookies): cifradas por WebView2 con AES-256-GCM; la clave, protegida por Windows (DPAPI).\n\n\
-             Datos de la app (ajustes, PIN, extensiones aprobadas{music}): bóveda AES-256-GCM; su clave está protegida por {key}.\n\n\
-             Disco: para cifrar el disco entero (caché incluida), activa BitLocker o el cifrado del dispositivo de Windows.{efs}\n\n\
-             Bloqueo: {lock}.\n\n\
-             Navegación: SmartScreen activo; descargas, ventanas emergentes y permisos (cámara, micrófono, \
-             ubicación…) bloqueados; solo https (http únicamente en tu red local){overlay}.\n\n\
-             Extensiones aprobadas: {approved}.",
-            music = if self.music.is_some() { ", biblioteca de música, licencia" } else { "" },
-            key = match crate::vault::key_protection(&self.paths.vault_key) {
-                Some(crate::vault::KeyProtection::DeviceAndAccount) => {
-                    "el chip de seguridad del equipo (TPM) y tu cuenta de Windows: no se puede abrir en otro equipo"
-                }
-                _ if crate::vault::hardware_protector().is_some() => {
-                    "tu cuenta de Windows (DPAPI); el chip de seguridad (TPM) aún se está preparando o no admite esta función"
-                }
-                _ => "tu cuenta de Windows (DPAPI); este equipo no tiene chip de seguridad (TPM) disponible",
-            },
-            efs = self.legacy_efs.describe(),
-            overlay = if self.overlay { "; en superposición máxima, solo los servicios del menú" } else { "" },
-        );
-        security::inform(self.hwnd(), "Protección de tus cuentas y datos", &text);
+        let mut paragraphs = vec![
+            t!("security.passwords"),
+            t!("security.cookies"),
+            if self.music.is_some() { t!("security.app_data_music", key = key) } else { t!("security.app_data", key = key) },
+            t!("security.disk"),
+        ];
+        paragraphs.extend(self.legacy_efs.describe());
+        paragraphs.push(match self.settings.lock {
+            LockMode::Off => t!("security.lock_off"),
+            LockMode::Hello => t!("security.lock_hello"),
+            LockMode::Pin => t!("security.lock_pin"),
+        });
+        paragraphs.push(if self.overlay { t!("security.browsing_overlay") } else { t!("security.browsing") });
+        paragraphs.push(t!("security.extensions", count = self.settings.approved_extensions.len()));
+        security::inform(self.dialog_owner(), &t!("dialog.security_title"), &t!("dialog.security_heading"), &paragraphs.join("\n\n"));
     }
 }
 
-/// Texto del diálogo de aprobación de una extensión.
-fn extension_question(ext: &LocalExtension, changed: bool) -> String {
-    let what = if changed { "cambió desde que la aprobaste" } else { "es nueva" };
-    let mut text = format!("La extensión «{}» {} {what}.\n\n", ext.name, ext.version);
+/// Heading and text of the approval dialog for an extension.
+fn extension_question(ext: &LocalExtension, changed: bool) -> (String, String) {
+    let heading = if changed {
+        t!("dialog.extension_changed", name = ext.name, version = ext.version)
+    } else {
+        t!("dialog.extension_new", name = ext.name, version = ext.version)
+    };
+    let mut text = String::new();
     if ext.all_sites {
-        text.push_str(
-            "⚠ Puede LEER Y CAMBIAR TODAS LAS PÁGINAS que abras en el reproductor, incluidas las de tus cuentas \
-             (YouTube, Netflix…).\n\n",
-        );
+        text.push_str(&format!("⚠ {}\n\n", t!("dialog.extension_all_sites")));
     }
     if ext.permissions.is_empty() {
-        text.push_str("No declara permisos especiales.\n");
+        text.push_str(&t!("dialog.extension_no_permissions"));
+        text.push('\n');
     } else {
-        text.push_str("Permisos y sitios:\n");
+        text.push_str(&t!("dialog.extension_permissions"));
+        text.push('\n');
         for permission in ext.permissions.iter().take(12) {
             text.push_str(&format!("  • {permission}\n"));
         }
         if ext.permissions.len() > 12 {
-            text.push_str(&format!("  • … y {} más\n", ext.permissions.len() - 12));
+            text.push_str(&format!("  • {}\n", t!("dialog.extension_more", count = ext.permissions.len() - 12)));
         }
     }
-    text.push_str(&format!(
-        "\nCarpeta: extensions\\{}\nHuella SHA-256: {}…\n\nCárgala solo si viene de una fuente de confianza. ¿Cargarla?",
-        ext.folder,
-        &ext.fingerprint[..16]
-    ));
-    text
+    text.push('\n');
+    text.push_str(&t!("dialog.extension_folder", folder = format!("extensions\\{}", ext.folder)));
+    text.push('\n');
+    text.push_str(&t!("dialog.extension_fingerprint", fingerprint = format!("{}…", &ext.fingerprint[..16])));
+    text.push_str("\n\n");
+    text.push_str(&t!("dialog.extension_trust"));
+    (heading, text)
+}
+
+/// The page with the host's window?
+fn is_stream_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| u.host_str() == Some(services::HOME_HOST) && u.path() == "/stream")
 }
 
 fn resize_direction(edge: Edge) -> ResizeDirection {

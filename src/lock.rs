@@ -1,17 +1,17 @@
-//! Bloqueo de la app: Windows Hello o PIN.
+//! App lock: Windows Hello or a PIN.
 //!
-//! - **Windows Hello** (huella, rostro o el PIN de Windows): la verificación
-//!   la hace Windows (`UserConsentVerifier`), con su propio límite de
-//!   intentos. La app nunca ve el dato biométrico ni el PIN de Windows.
-//! - **PIN propio**: se guarda solo su hash **Argon2id** (función de
-//!   derivación lenta y con mucha memoria, la recomendada por OWASP para
-//!   contraseñas) con sal aleatoria, dentro de la bóveda cifrada. Tras 5
-//!   intentos fallidos, cada intento más obliga a esperar el doble (30 s,
-//!   1 min, 2 min… hasta 15 min); el contador sobrevive a reiniciar la app.
+//! - **Windows Hello** (fingerprint, face or the Windows PIN): Windows does
+//!   the check (`UserConsentVerifier`), with its own attempt limit. The app
+//!   never sees the biometric data or the Windows PIN.
+//! - **Own PIN**: only its **Argon2id** hash is kept (a slow, memory-hard
+//!   key derivation function, the one OWASP recommends for passwords) with a
+//!   random salt, inside the encrypted vault. After 5 failed attempts, each
+//!   further attempt doubles the wait (30 s, 1 min, 2 min… up to 15 min);
+//!   the counter survives restarting the app.
 //!
-//! El bloqueo protege lo que se ve y se controla en la app (sesiones
-//! abiertas, lo que suena) frente a otra persona con acceso al equipo. El
-//! cifrado en disco lo dan la bóveda, DPAPI y EFS (security.rs).
+//! The lock protects what is seen and controlled in the app (open sessions,
+//! what is playing) from another person with access to the PC. Encryption
+//! on disk comes from the vault and DPAPI (vault.rs).
 
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -21,54 +21,54 @@ use zeroize::Zeroizing;
 
 pub const PIN_MIN: usize = 6;
 pub const PIN_MAX: usize = 64;
-/// Fallos gratis antes de empezar a esperar.
+/// Free failures before waiting starts.
 const FREE_ATTEMPTS: u32 = 5;
 const FIRST_DELAY: u64 = 30;
 const MAX_DELAY: u64 = 15 * 60;
 
-/// Argon2id con 64 MiB, 3 pasadas, 1 hilo: ~0,2–0,4 s por intento en un
-/// equipo normal; probar PINs por fuerza bruta fuera de la app es caro.
+/// Argon2id with 64 MiB, 3 passes, 1 thread: ~0.2–0.4 s per attempt on a
+/// normal PC; brute-forcing PINs outside the app is expensive.
 fn argon2() -> Argon2<'static> {
-    let params = Params::new(64 * 1024, 3, 1, None).expect("parámetros válidos");
+    let params = Params::new(64 * 1024, 3, 1, None).expect("valid parameters");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-/// ¿Sirve como PIN? Devuelve el motivo si no.
+/// Is it usable as a PIN? If not, the i18n key of the reason.
 pub fn check_pin(pin: &str) -> Result<(), &'static str> {
     let len = pin.chars().count();
     if len < PIN_MIN {
-        return Err("El PIN debe tener al menos 6 caracteres");
+        return Err("lock.pin_too_short");
     }
     if len > PIN_MAX || pin.chars().any(char::is_control) {
-        return Err("El PIN tiene caracteres no válidos o es demasiado largo");
+        return Err("lock.pin_invalid");
     }
     let first = pin.chars().next().unwrap_or_default();
     if pin.chars().all(|c| c == first) {
-        return Err("El PIN no puede ser un mismo carácter repetido");
+        return Err("lock.pin_repeated");
     }
     let digits: Vec<u32> = pin.chars().filter_map(|c| c.to_digit(10)).collect();
     if digits.len() == len && (digits.windows(2).all(|w| w[1] == w[0] + 1) || digits.windows(2).all(|w| w[0] == w[1] + 1)) {
-        return Err("El PIN no puede ser una secuencia como 123456");
+        return Err("lock.pin_sequence");
     }
     Ok(())
 }
 
-/// Hash Argon2id en formato PHC (`$argon2id$v=19$m=65536,t=3,p=1$sal$hash`).
+/// Argon2id hash as a PHC string (`$argon2id$v=19$m=65536,t=3,p=1$salt$hash`).
 pub fn hash_pin(pin: &str) -> Result<String, String> {
     let salt_bytes = Zeroizing::new(crate::vault::random_bytes::<16>().map_err(|e| e.to_string())?);
     let salt = SaltString::encode_b64(salt_bytes.as_slice()).map_err(|e| e.to_string())?;
     argon2().hash_password(pin.as_bytes(), &salt).map(|h| h.to_string()).map_err(|e| e.to_string())
 }
 
-/// Comprueba el PIN contra el hash guardado (comparación en tiempo
-/// constante dentro de `argon2`).
+/// Checks the PIN against the saved hash (constant-time comparison inside
+/// `argon2`).
 pub fn verify_pin(pin: &str, phc: &str) -> bool {
     let Ok(hash) = PasswordHash::new(phc) else { return false };
-    // Se verifica con los parámetros guardados en el propio hash.
+    // Verified with the parameters stored in the hash itself.
     Argon2::default().verify_password(pin.as_bytes(), &hash).is_ok()
 }
 
-/// Espera obligatoria tras `failures` fallos seguidos (segundos).
+/// Mandatory wait after `failures` failures in a row (seconds).
 pub fn delay_after(failures: u32) -> u64 {
     if failures < FREE_ATTEMPTS {
         return 0;
@@ -77,7 +77,7 @@ pub fn delay_after(failures: u32) -> u64 {
     (FIRST_DELAY << doublings).min(MAX_DELAY)
 }
 
-/// Segundos que faltan para poder intentarlo, o 0.
+/// Seconds left before another attempt is allowed, or 0.
 pub fn remaining(blocked_until: u64, now: u64) -> u64 {
     blocked_until.saturating_sub(now)
 }
@@ -88,11 +88,33 @@ pub fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// Why Windows Hello could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelloError {
+    /// Not available on this PC (the Windows error code).
+    Unavailable(i32),
+    NotConfigured,
+    DisabledByPolicy,
+    RetriesExhausted,
+}
+
+impl HelloError {
+    /// A full sentence for the lock screen.
+    pub fn text(&self) -> String {
+        match self {
+            HelloError::Unavailable(code) => t!("lock.hello_unavailable", code = format!("{code:#010x}")),
+            HelloError::NotConfigured => t!("lock.hello_not_configured"),
+            HelloError::DisabledByPolicy => t!("lock.hello_disabled"),
+            HelloError::RetriesExhausted => t!("lock.hello_retries"),
+        }
+    }
+}
+
 #[cfg(windows)]
 pub use hello::hello_verify;
 
-/// Windows Hello vía `UserConsentVerifier`. Bloqueantes: llamar desde un
-/// hilo aparte.
+/// Windows Hello through `UserConsentVerifier`. Blocking: call from a
+/// separate thread.
 #[cfg(windows)]
 mod hello {
     use windows::{
@@ -106,16 +128,18 @@ mod hello {
     use windows_future::IAsyncOperation;
 
     fn init_thread() {
-        // Ya inicializado devuelve un error que no importa.
+        // Already initialized returns an error that does not matter.
         let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
     }
 
-    /// Pide la verificación con el diálogo de Windows, ligado a `hwnd`.
-    /// `Ok(true)` solo si Windows confirma que es el usuario; `Ok(false)` si
-    /// se canceló; `Err` con el motivo si Windows Hello no se puede usar.
-    pub fn hello_verify(hwnd: isize, message: &str) -> Result<bool, String> {
+    use super::HelloError;
+
+    /// Asks for verification with the Windows dialog, tied to `hwnd`.
+    /// `Ok(true)` only if Windows confirms it is the user; `Ok(false)` if it
+    /// was cancelled; `Err` with the reason if Windows Hello cannot be used.
+    pub fn hello_verify(hwnd: isize, message: &str) -> Result<bool, HelloError> {
         init_thread();
-        let unavailable = |e: windows::core::Error| format!("no está disponible en este equipo (código {:#010x})", e.code().0);
+        let unavailable = |e: windows::core::Error| HelloError::Unavailable(e.code().0);
         let interop = factory::<UserConsentVerifier, IUserConsentVerifierInterop>().map_err(unavailable)?;
         let operation: IAsyncOperation<UserConsentVerificationResult> = unsafe {
             interop.RequestVerificationForWindowAsync(HWND(hwnd as _), &HSTRING::from(message))
@@ -126,18 +150,18 @@ mod hello {
             UserConsentVerificationResult::Verified => Ok(true),
             UserConsentVerificationResult::Canceled | UserConsentVerificationResult::DeviceBusy => Ok(false),
             UserConsentVerificationResult::DeviceNotPresent | UserConsentVerificationResult::NotConfiguredForUser => {
-                Err("no está configurado en este equipo; configúralo en Configuración → Cuentas → Opciones de inicio de sesión, o usa un PIN propio".into())
+                Err(HelloError::NotConfigured)
             }
-            UserConsentVerificationResult::DisabledByPolicy => Err("está desactivado por una directiva del equipo".into()),
-            UserConsentVerificationResult::RetriesExhausted => Err("demasiados intentos; espera un momento".into()),
+            UserConsentVerificationResult::DisabledByPolicy => Err(HelloError::DisabledByPolicy),
+            UserConsentVerificationResult::RetriesExhausted => Err(HelloError::RetriesExhausted),
             _ => Ok(false),
         }
     }
 }
 
 #[cfg(not(windows))]
-pub fn hello_verify(_: isize, _: &str) -> Result<bool, String> {
-    Err("solo en Windows".into())
+pub fn hello_verify(_: isize, _: &str) -> Result<bool, HelloError> {
+    Err(HelloError::Unavailable(0))
 }
 
 #[cfg(test)]
@@ -147,11 +171,12 @@ mod tests {
     #[test]
     fn pin_rules() {
         assert!(check_pin("482915").is_ok());
-        assert!(check_pin("correcto caballo").is_ok());
+        assert!(check_pin("correct horse").is_ok());
         for bad in ["", "12345", "111111", "aaaaaaa", "123456", "987654", "12345678", "abc\u{7}def"] {
             assert!(check_pin(bad).is_err(), "{bad:?}");
         }
-        assert!(check_pin(&"x1".repeat(40)).is_err(), "demasiado largo");
+        assert!(check_pin(&"x1".repeat(40)).is_err(), "too long");
+        assert_eq!(check_pin("123456"), Err("lock.pin_sequence"));
     }
 
     #[test]
@@ -160,10 +185,10 @@ mod tests {
         assert!(a.starts_with("$argon2id$v=19$m=65536,t=3,p=1$"), "{a}");
         assert!(!a.contains("482915"));
         let b = hash_pin("482915").unwrap();
-        assert_ne!(a, b, "sal distinta cada vez");
+        assert_ne!(a, b, "a different salt each time");
         assert!(verify_pin("482915", &a) && verify_pin("482915", &b));
         assert!(!verify_pin("482916", &a));
-        assert!(!verify_pin("482915", "no es un hash"));
+        assert!(!verify_pin("482915", "not a hash"));
         assert!(!verify_pin("", &a));
     }
 

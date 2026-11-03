@@ -1,32 +1,31 @@
-// Mantenimiento de memoria en sesiones largas (Fase 4).
+// Memory upkeep in long sessions.
 //
-// La SPA de YouTube crece con las horas: las navegaciones internas no
-// liberan la página. Este script recarga el documento cuando se cumplen
-// TODAS estas condiciones:
-//   - no hay ningún video reproduciéndose,
-//   - el usuario no ha interactuado en IDLE,
-//   - el documento lleva al menos MIN_AGE cargado,
-// y ADEMÁS se cumple alguna de estas:
-//   - el documento supera MAX_AGE, o
-//   - el heap de JavaScript supera HEAP_LIMIT.
+// YouTube's SPA grows over the hours: internal navigations do not free the
+// page. This script reloads the document when ALL of these hold:
+//   - no video is playing,
+//   - the user has not interacted for IDLE,
+//   - the document has been loaded for at least MIN_AGE,
+// AND one of these holds too:
+//   - the document is older than MAX_AGE, or
+//   - the JavaScript heap is over HEAP_LIMIT.
 //
-// Al recargar conserva el video y el segundo exacto (parámetro `t`) y, al
-// volver, impide que el video se reanude solo durante RESUME_GUARD.
-// Limitación: la cola temporal ("Añadir a la cola") no está en la URL y se
-// pierde. Las listas de reproducción (`list=`) sí se conservan.
+// When reloading it keeps the video and the exact second (the `t`
+// parameter) and, on the way back, stops the video from resuming on its own
+// for RESUME_GUARD. Limitation: the temporary queue ("Add to queue") is not in
+// the URL and is lost. Playlists (`list=`) are kept.
 (() => {
   'use strict';
 
   if (window.top !== window || window.__ytMiniPlayerMaintenance) return;
   Object.defineProperty(window, '__ytMiniPlayerMaintenance', { value: true });
-  // No tocar las páginas de inicio de sesión de Google.
+  // Do not touch Google's sign-in pages.
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
   const MINUTE = 60 * 1000;
   const CHECK_EVERY = 5 * MINUTE;
   const MIN_AGE = 30 * MINUTE;
   const MAX_AGE = 12 * 60 * MINUTE;
-  const HEAP_LIMIT = 768 * 1024 * 1024; // bytes de heap JS usado
+  const HEAP_LIMIT = 768 * 1024 * 1024; // bytes of JS heap in use
   const IDLE = 15 * MINUTE;
   const RESUME_GUARD = 60 * 1000;
   const FLAG = 'ytmp-maintenance-reload';
@@ -36,36 +35,36 @@
 
   function onInput() {
     lastInput = Date.now();
-    guardUntil = 0; // si el usuario interactúa, decide él
+    guardUntil = 0; // if the user interacts, they decide
   }
   for (const type of ['pointerdown', 'keydown', 'wheel']) {
     window.addEventListener(type, onInput, { capture: true, passive: true });
   }
 
-  // --- Vuelta de una recarga de mantenimiento ------------------------------
+  // --- Back from an upkeep reload -----------------------------------------------
 
   try {
     if (sessionStorage.getItem(FLAG)) {
       sessionStorage.removeItem(FLAG);
       guardUntil = Date.now() + RESUME_GUARD;
     }
-  } catch (_) { /* almacenamiento no disponible: sin protección */ }
+  } catch (_) { /* storage not available: no guard */ }
 
-  // `play` no burbujea, pero sí pasa por window en la fase de captura.
+  // `play` does not bubble, but it goes through window in the capture phase.
   window.addEventListener('play', (e) => {
     if (Date.now() < guardUntil && e.target && typeof e.target.pause === 'function') {
       e.target.pause();
     }
   }, true);
 
-  // --- Comprobación periódica ----------------------------------------------
+  // --- Periodic check ---------------------------------------------------------
 
   function isPlaying() {
     return Array.from(document.querySelectorAll('video')).some((v) => !v.paused && !v.ended);
   }
 
   function heapBytes() {
-    const m = performance.memory; // no estándar; disponible en Chromium
+    const m = performance.memory; // not standard; available in Chromium
     return (m && m.usedJSHeapSize) || 0;
   }
 
@@ -85,7 +84,7 @@
   }
 
   setInterval(() => {
-    const age = performance.now(); // desde la carga del documento, no de la SPA
+    const age = performance.now(); // since the document loaded, not the SPA
     if (age < MIN_AGE || Date.now() - lastInput < IDLE || isPlaying()) return;
     if (age >= MAX_AGE || heapBytes() >= HEAP_LIMIT) reloadPreservingPosition();
   }, CHECK_EVERY);

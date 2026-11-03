@@ -1,31 +1,42 @@
 <!doctype html>
-<html lang="es">
+<html lang="__YTMP_LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Barra de música</title>
+<title data-i18n="mini.document_title"></title>
 <style>
-  /* Barra de música. Vive dentro de la barra de tareas (32–48 px de alto
-     según la versión de Windows y el DPI) o flota a 48 px. Todo se ajusta
-     a la altura de la ventana. */
+  /* Music bar. It lives inside the taskbar (32–48 px tall depending on the
+     Windows version and the DPI) or floats at 48 px. Everything adapts to
+     the window's height. */
   :root {
-    --bg-1: #10152a;
-    --bg-2: #181d3a;
-    --lavender: #c2b3ff;
-    --lavender-dim: #8f84c9;
-    --track: #2f2c55;
-    --text: #f4f2ff;
-    --muted: #a8a2cc;
-    --wave-1: #5f86ff;
-    --wave-2: #a9bcff;
-    --display: "Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    /* The palette, deepest to lightest. */
+    --deep: #03045e;
+    --french: #023e8a;
+    --teal: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise: #00b4d8;
+    --sky: #48cae4;
+    --frost: #90e0ef;
+    --frost-2: #ade8f4;
+    --cyan: #caf0f8;
+    --ground: var(--deep);
+    --line: var(--french);
+    --text: var(--cyan);
+    --muted: var(--frost);
+    --dim: rgba(144, 224, 239, .62);
+    --tint: rgba(0, 119, 182, .35);
+    --track: rgba(2, 62, 138, .9);
+    --accent: var(--turquoise);
+    --accent-2: var(--sky);
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; }
   body {
-    background: linear-gradient(100deg, var(--bg-1) 0%, var(--bg-2) 100%);
+    /* Deep on the left, lighter toward the controls. */
+    background: linear-gradient(100deg, var(--deep) 30%, var(--french) 100%);
     color: var(--text); font: 12px/1.3 var(--body); -webkit-font-smoothing: antialiased; user-select: none;
   }
   button { font: inherit; color: inherit; background: none; border: 0; margin: 0; padding: 0; cursor: pointer; }
@@ -38,57 +49,60 @@
     padding: 0 10px 2px 5px;
   }
 
-  /* Portada: abre el reproductor. */
+  /* Cover: opens the player. */
   .art {
     flex: none; position: relative; width: min(40px, calc(100vh - 10px)); aspect-ratio: 1;
-    border-radius: 5px; overflow: hidden; background: #232947; box-shadow: 0 1px 6px rgba(0, 0, 0, .35);
+    border-radius: 6px; overflow: hidden; background: var(--teal); box-shadow: 0 0 0 1px rgba(72, 202, 228, .25);
   }
   .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .art .empty, .art .open { position: absolute; inset: 0; display: grid; place-items: center; }
-  .art .empty { color: var(--lavender-dim); }
+  .art .empty { color: var(--frost-2); background: linear-gradient(135deg, var(--teal), var(--blue-green)); }
   .art .empty svg { width: 55%; height: 55%; }
-  .art .open { color: #fff; background: rgba(16, 21, 42, .62); opacity: 0; transition: opacity .15s; }
+  .art .open { color: var(--text); background: rgba(3, 4, 94, .7); opacity: 0; transition: opacity .15s; }
   .art .open svg { width: 50%; height: 50%; }
   .art:hover .open { opacity: 1; }
 
-  /* Título arriba; abajo, el artista o (un momento) el volumen. */
+  /* Title on top; below, the artist or (for a moment) the volume. */
   .text { flex: 1; min-width: 0; display: grid; align-content: center; }
   .title {
-    grid-row: 1; grid-column: 1; font: 600 13px/1.15 var(--display); letter-spacing: .01em;
+    grid-row: 1; grid-column: 1; font: 600 13px/1.15 var(--display);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .artist, .level {
     grid-row: 2; grid-column: 1; margin-top: 1px; font-size: 11px; line-height: 1.2;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .15s;
   }
-  .artist { color: var(--muted); font-style: italic; }
-  .level { color: var(--lavender); font-family: var(--display); font-variant-numeric: tabular-nums; opacity: 0; }
+  .artist { color: var(--frost); opacity: .8; }
+  .level { color: var(--accent-2); font-variant-numeric: tabular-nums; opacity: 0; }
   .text.show-level .artist { opacity: 0; }
   .text.show-level .level { opacity: 1; }
-  /* Anclada: el texto es el asa para moverla por la barra de tareas. */
+  /* Docked: the text is the handle to move it along the taskbar. */
   body.docked .text { cursor: grab; }
   body.dragging, body.dragging * { cursor: grabbing !important; }
 
   .controls { flex: none; display: flex; align-items: center; gap: 2px; }
   .controls button {
-    width: min(30px, calc(100vh - 10px)); aspect-ratio: 1; border-radius: 6px; display: grid; place-items: center;
+    width: min(30px, calc(100vh - 10px)); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center;
     color: var(--text); transition: color .12s, background-color .12s, transform .12s;
   }
-  .controls button:not(:disabled):hover { color: var(--lavender); background: rgba(194, 179, 255, .08); }
+  .controls button:not(:disabled):hover { color: var(--cyan); background: var(--tint); }
+  .controls .play { color: var(--turquoise); }
+  .controls .play:not(:disabled):hover { color: var(--sky); }
   .controls button:not(:disabled):active { transform: scale(.9); }
   .controls svg { width: 15px; height: 15px; }
   .controls .play svg { width: 19px; height: 19px; }
 
-  /* Visualizador: decorativo mientras suena; con la rueda muestra el volumen. */
+  /* Visualizer: decorative while playing; with the wheel it shows the volume. */
   .wave {
     flex: none; position: relative; width: 58px; height: min(30px, calc(100vh - 14px));
     display: flex; align-items: center; justify-content: space-between; cursor: pointer;
   }
   .wave i {
     width: 2px; height: 100%; border-radius: 1px;
-    background: linear-gradient(to top, var(--wave-1), var(--wave-2));
-    /* En pausa: la onda queda congelada y atenuada. */
-    transform: scaleY(calc(var(--h) * .32)); opacity: .55;
+    /* The palette from the depths up: each bar fades from teal to cyan. */
+    background: linear-gradient(to top, var(--teal), var(--turquoise) 55%, var(--frost-2));
+    /* Paused: the wave freezes and dims. */
+    transform: scaleY(calc(var(--h) * .32)); opacity: .45;
     transition: transform .25s ease, background .2s, opacity .2s;
   }
   .wave.playing i { opacity: 1; animation: pulse var(--d) ease-in-out var(--delay) infinite alternate; }
@@ -96,44 +110,44 @@
     from { transform: scaleY(calc(var(--h) * .28)); }
     to { transform: scaleY(var(--h)); }
   }
-  /* Medidor de volumen: barras en rampa, encendidas hasta el nivel. */
-  .wave.meter i { animation: none; opacity: 1; transform: scaleY(var(--ramp)); background: #3a4066; }
-  .wave.meter i.on { background: linear-gradient(to top, var(--lavender-dim), var(--lavender)); }
-  /* Silencio y "nada sonando" mandan sobre todo lo demás. */
+  /* Volume meter: ramped bars, lit up to the level. */
+  .wave.meter i { animation: none; opacity: 1; transform: scaleY(var(--ramp)); background: var(--line); }
+  .wave.meter i.on { background: linear-gradient(to top, var(--blue-green), var(--sky), var(--cyan)); }
+  /* Muted and "nothing playing" win over everything else. */
   .wave.muted i, .wave.muted.meter i, .wave.idle i {
-    animation: none; opacity: 1; background: #3a3f63; transform: scaleY(.16);
+    animation: none; opacity: 1; background: var(--line); transform: scaleY(.16);
   }
   .wave .mute-icon {
-    position: absolute; inset: 0; display: grid; place-items: center; color: var(--lavender);
+    position: absolute; inset: 0; display: grid; place-items: center; color: var(--accent-2);
     opacity: 0; transition: opacity .15s; pointer-events: none;
   }
-  .wave .mute-icon svg { width: 15px; height: 15px; padding: 2px; box-sizing: content-box; border-radius: 4px; background: var(--bg-2); }
+  .wave .mute-icon svg { width: 15px; height: 15px; padding: 2px; box-sizing: content-box; border-radius: 3px; background: var(--french); }
   .wave.muted .mute-icon { opacity: 1; }
   .wave.idle { cursor: default; }
 
-  /* Windows 10 no deja colorear el borde de la ventana: se dibuja aquí. */
+  /* Windows 10 can't colour the window border: it is drawn here. */
   body.css-border::after {
-    content: ""; position: fixed; inset: 0; pointer-events: none; border-radius: 4px;
-    box-shadow: inset 0 0 0 1px var(--lavender-dim);
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 0 1px var(--teal);
   }
 
-  /* Progreso: la línea lavanda del borde inferior. */
+  /* Progress: the turquoise line along the bottom edge. */
   .progress {
     position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: pointer;
     display: flex; align-items: flex-end;
   }
   .progress .track { position: relative; width: 100%; height: 2px; background: var(--track); transition: height .12s; }
-  .progress .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--lavender); }
+  .progress .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, var(--blue-green), var(--turquoise), var(--frost)); }
   .progress:hover .track, .progress.dragging .track { height: 4px; }
   .progress.disabled { cursor: default; }
-  .progress.live .fill { width: 100% !important; background: linear-gradient(90deg, var(--lavender-dim), var(--lavender)); }
+  .progress.live .fill { width: 100% !important; background: linear-gradient(90deg, var(--teal), var(--turquoise), var(--sky), var(--frost), var(--cyan)); opacity: .8; }
   .tip {
-    position: absolute; bottom: 7px; transform: translateX(-50%); padding: 1px 6px; border-radius: 5px;
-    background: #2a2f52; color: var(--text); font: 11px/1.3 var(--display); white-space: nowrap; pointer-events: none;
+    position: absolute; bottom: 7px; transform: translateX(-50%); padding: 1px 6px; border-radius: 3px;
+    background: var(--turquoise); color: var(--deep); font: 600 11px/1.3 var(--body); white-space: nowrap; pointer-events: none;
     font-variant-numeric: tabular-nums;
   }
 
-  /* Barra de tareas de Windows 10 (la barra mide ~32 px). */
+  /* Windows 10 taskbar (the bar is ~32 px tall). */
   @media (max-height: 35px) {
     .bar { gap: 6px; }
     .title { font-size: 12px; }
@@ -141,15 +155,15 @@
     .controls svg { width: 13px; height: 13px; }
     .controls .play svg { width: 16px; height: 16px; }
   }
-  /* Estrecha (para no tapar los iconos de las apps): sin la onda. */
+  /* Narrow (so as not to cover the apps' icons): no wave. */
   @media (max-width: 300px) {
     .wave { display: none; }
     .bar { gap: 6px; }
   }
-  /* Flotante (48 px). */
+  /* Floating (48 px). */
   @media (min-height: 46px) {
     .bar { gap: 10px; padding-left: 6px; }
-    .art { border-radius: 7px; }
+    .art { border-radius: 8px; }
     .title { font-size: 14px; }
     .artist, .level { font-size: 12px; }
   }
@@ -162,7 +176,7 @@
 </head>
 <body>
   <div class="bar" id="bar">
-    <button class="art" id="art" type="button" title="Mostrar el reproductor (Ctrl+Alt+Y)" aria-label="Mostrar el reproductor">
+    <button class="art" id="art" type="button">
       <img id="artwork" alt="" hidden>
       <span class="empty" id="empty" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
@@ -173,41 +187,60 @@
     </button>
 
     <div class="text" id="text">
-      <div class="title" id="title">Nada sonando</div>
-      <div class="artist" id="artist">Toca la portada para abrir</div>
+      <div class="title" id="title"></div>
+      <div class="artist" id="artist"></div>
       <div class="level" id="level" aria-live="polite"></div>
     </div>
 
     <div class="controls">
-      <button id="previous" type="button" title="Anterior (Ctrl+Alt+B)" aria-label="Anterior">
+      <button id="previous" type="button">
         <svg viewBox="0 0 24 24"><path d="M5 5h2.4v14H5z"/><path d="M19 5.4v13.2L8.4 12z"/></svg>
       </button>
-      <button class="play" id="toggle" type="button" title="Reproducir / pausar (Ctrl+Alt+P)" aria-label="Reproducir">
+      <button class="play" id="toggle" type="button">
         <svg viewBox="0 0 24 24" id="icon-play"><path d="M7 4.8v14.4L19 12z"/></svg>
         <svg viewBox="0 0 24 24" id="icon-pause" hidden><path d="M6.5 4.5h3.6v15H6.5zM13.9 4.5h3.6v15h-3.6z"/></svg>
       </button>
-      <button id="next" type="button" title="Siguiente (Ctrl+Alt+N)" aria-label="Siguiente">
+      <button id="next" type="button">
         <svg viewBox="0 0 24 24"><path d="M16.6 5H19v14h-2.4z"/><path d="M5 5.4v13.2L15.6 12z"/></svg>
       </button>
     </div>
 
-    <div class="wave" id="wave" role="button" title="Volumen: rueda del ratón · Clic: silenciar (Ctrl+Alt+M)" aria-label="Volumen">
+    <div class="wave" id="wave" role="button">
       <span class="mute-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.3 9.3l1.4-1.4 2.1 2.1 2.1-2.1 1.4 1.4-2.1 2.1 2.1 2.1-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg>
       </span>
     </div>
 
-    <div class="progress disabled" id="progress" title="Clic o arrastra para ir a otro punto (Ctrl+Alt+← / →: 10 s)">
+    <div class="progress disabled" id="progress">
       <div class="track"><div class="fill" id="fill"></div></div>
     </div>
   </div>
 
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
 <script>
 (() => {
   'use strict';
-  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* fuera de la app */ } };
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* outside the app */ } };
   const $ = (id) => document.getElementById(id);
-  // Funciona igual para HTML y SVG (los SVG no tienen la propiedad .hidden).
+
+  // Strings in the app's language, embedded when the page is served (the
+  // app serves it again when the language changes).
+  const I18N = data.i18n || { lang: 'en', strings: {} };
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+  document.title = t('mini.document_title');
+  // The global shortcuts that work on this PC (the app sends them).
+  let shortcuts = {};
+  const withKeys = (label, action) => (shortcuts[action] ? `${label} (${shortcuts[action]})` : label);
+  // Works the same for HTML and SVG (SVG elements have no .hidden property).
   const show = (el, visible) => el.toggleAttribute('hidden', !visible);
 
   const els = {
@@ -216,14 +249,14 @@
     pause: $('icon-pause'), wave: $('wave'), progress: $('progress'), fill: $('fill'),
   };
 
-  // --- Visualizador: 16 barras con forma de onda, cada una a su ritmo ----------
+  // --- Visualizer: 16 wave-shaped bars, each at its own pace -------------------
   const BARS = 16;
   const bars = [];
   const muteIcon = els.wave.querySelector('.mute-icon');
   for (let i = 0; i < BARS; i++) {
     const bar = document.createElement('i');
     const x = (i - (BARS - 1) / 2) / ((BARS - 1) / 2);           // -1 … 1
-    const peak = 0.38 + 0.62 * Math.exp(-2.2 * x * x);            // más altas al centro
+    const peak = 0.38 + 0.62 * Math.exp(-2.2 * x * x);            // taller in the middle
     bar.style.setProperty('--h', (peak * (0.8 + 0.2 * Math.abs(Math.sin(i * 1.7)))).toFixed(3));
     bar.style.setProperty('--d', (0.42 + ((i * 37) % 23) / 60).toFixed(2) + 's');
     bar.style.setProperty('--delay', (-((i * 53) % 29) / 40).toFixed(2) + 's');
@@ -246,7 +279,7 @@
     return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
   }
 
-  // Un aviso corto en la línea del artista ("Volumen 65 %", "Silencio").
+  // A short notice on the artist line ("Volume 65%", "Muted").
   function flash(text) {
     els.level.textContent = text;
     els.text.classList.add('show-level');
@@ -254,9 +287,9 @@
     levelTimer = setTimeout(() => els.text.classList.remove('show-level'), 1400);
   }
 
-  // El volumen en las barras (y en texto) durante un momento.
+  // The volume on the bars (and as text) for a moment.
   function showVolume(percent) {
-    flash(percent === 0 ? 'Silencio' : `Volumen ${percent} %`);
+    flash(percent === 0 ? t('mini.muted') : t('mini.volume', { value: percent }));
     if (els.wave.classList.contains('muted')) return;
     const on = Math.round((percent / 100) * BARS);
     bars.forEach((bar, i) => bar.classList.toggle('on', i < on));
@@ -265,21 +298,41 @@
     meterTimer = setTimeout(() => els.wave.classList.remove('meter'), 1400);
   }
 
+  // Labels that only change with the shortcuts.
+  function label() {
+    const art = $('art');
+    art.title = withKeys(t('mini.show_player'), 'toggleVisible');
+    art.setAttribute('aria-label', t('mini.show_player'));
+    els.previous.title = withKeys(t('mini.previous'), 'previous');
+    els.previous.setAttribute('aria-label', t('mini.previous'));
+    els.toggle.title = withKeys(t('mini.play_pause'), 'playPause');
+    els.next.title = withKeys(t('mini.next'), 'next');
+    els.next.setAttribute('aria-label', t('mini.next'));
+    els.wave.title = t('mini.volume_hint') + (shortcuts.mute ? ` · ${t('mini.mute')} (${shortcuts.mute})` : '');
+    els.wave.setAttribute('aria-label', t('mini.volume_label'));
+    const seek = [shortcuts.seekBack, shortcuts.seekForward].filter(Boolean).join(' / ');
+    els.progress.title = t('mini.seek_hint') + (seek ? ` (${seek})` : '');
+  }
+
   function render(payload) {
+    if (payload && payload.shortcuts && JSON.stringify(payload.shortcuts) !== JSON.stringify(shortcuts)) {
+      shortcuts = payload.shortcuts;
+      label();
+    }
     media = (payload && payload.media) || {};
     docked = !!(payload && payload.docked);
     const source = (payload && payload.source) || '';
     const has = !!media.hasMedia;
     document.body.classList.toggle('docked', docked);
     document.body.classList.toggle('css-border', !!(payload && payload.cssBorder));
-    els.text.title = docked ? 'Arrastra para moverla por la barra de tareas · Clic derecho: cerrar' : 'Clic derecho: cerrar';
+    els.text.title = t(docked ? 'mini.drag_hint' : 'mini.close_hint');
 
-    els.title.textContent = has && media.title ? media.title : 'Nada sonando';
-    // Sitio fuera del catálogo: su dominio siempre a la vista.
+    els.title.textContent = has && media.title ? media.title : t('mini.nothing_playing');
+    // A site outside the catalog: its domain always in view.
     const origin = (payload && payload.origin) || '';
     els.artist.textContent = has
-      ? [media.live ? 'En directo' : '', media.artist || '', origin].filter(Boolean).join(' · ') || source
-      : source || origin || 'Toca la portada para abrir';
+      ? [media.live ? t('mini.live') : '', media.artist || '', origin].filter(Boolean).join(' · ') || source
+      : source || origin || t('mini.open_hint');
 
     const art = has && media.artwork ? media.artwork : '';
     if (els.artwork.dataset.src !== art) {
@@ -291,7 +344,7 @@
 
     show(els.play, !media.playing);
     show(els.pause, !!media.playing);
-    els.toggle.setAttribute('aria-label', media.playing ? 'Pausar' : 'Reproducir');
+    els.toggle.setAttribute('aria-label', t(media.playing ? 'mini.pause' : 'mini.play'));
     els.toggle.disabled = !has;
     els.next.disabled = !(has && media.canNext);
     els.previous.disabled = !(has && media.canPrevious);
@@ -303,7 +356,7 @@
     if (muted || !has) els.wave.classList.remove('meter');
     const percent = Math.round((Number(media.volume) || 0) * 100);
     if (has && lastMuted !== null && muted !== lastMuted) {
-      flash(muted ? 'Silencio' : `Volumen ${percent} %`);
+      flash(muted ? t('mini.muted') : t('mini.volume', { value: percent }));
     } else if (has && lastVolume !== null && percent !== lastVolume && !muted) {
       showVolume(percent);
     }
@@ -327,7 +380,7 @@
   els.next.addEventListener('click', () => send('media:next'));
   els.wave.addEventListener('click', () => { if (media.hasMedia) send('media:mute'); });
 
-  // La rueda del ratón, en cualquier parte, cambia el volumen.
+  // The mouse wheel, anywhere, changes the volume.
   window.addEventListener('wheel', (e) => {
     if (!media.hasMedia) return;
     e.preventDefault();
@@ -338,10 +391,10 @@
     send('media:volume-by:' + step);
   }, { passive: false });
 
-  // Clic derecho en cualquier parte: cerrar.
+  // Right click anywhere: close.
   window.addEventListener('contextmenu', (e) => { e.preventDefault(); send('mini:close'); });
 
-  // --- Progreso: clic o arrastre sobre la línea inferior ---------------------
+  // --- Progress: click or drag on the bottom line ----------------------------
   let tip = null;
   const canSeek = () => !!media.hasMedia && !!media.canSeek && Number(media.duration) > 0;
   const ratioAt = (x) => {
@@ -384,8 +437,8 @@
     send('media:seek-to:' + Math.floor(ratioAt(e.clientX) * media.duration));
   });
 
-  // --- Mover la barra por la barra de tareas -----------------------------------
-  // La página solo avisa de las fases; la posición la toma la app del cursor.
+  // --- Moving the bar along the taskbar -----------------------------------------
+  // The page only reports the phases; the app takes the position from the cursor.
   let press = null;
   let movePending = false;
   const isHandle = (target) => !target.closest('button, .wave, .progress');
@@ -399,7 +452,7 @@
       if (Math.abs(e.screenX - press.x) < 4) return;
       press.dragging = true;
       document.body.classList.add('dragging');
-      try { els.bar.setPointerCapture(press.id); } catch (_) { /* ya soltó */ }
+      try { els.bar.setPointerCapture(press.id); } catch (_) { /* already released */ }
       send('mini:drag:start');
     }
     if (!movePending) {
@@ -421,11 +474,12 @@
   els.bar.addEventListener('pointercancel', endDrag);
   els.bar.addEventListener('lostpointercapture', endDrag);
 
-  // Mientras el ratón está encima, la app no la oculta.
+  // While the mouse is over it, the app doesn't hide it.
   document.documentElement.addEventListener('mouseenter', () => send('mini:hover:1'));
   document.documentElement.addEventListener('mouseleave', () => send('mini:hover:0'));
 
   Object.defineProperty(window, '__ytmpMini', { value: render });
+  label();
   render(null);
   send('mini:ready');
 })();

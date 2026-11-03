@@ -1,10 +1,10 @@
-//! Pantalla de bloqueo: un webview propio encima del reproductor.
+//! Lock screen: a webview of its own on top of the player.
 //!
-//! Es otro webview (hijo de la ventana principal) con su propia página
-//! (`https://ytmp.localhost/lock`), su propio protocolo IPC cerrado
-//! (`ipc::parse_lock`) y la navegación fijada a esa página. Mientras está
-//! bloqueada, el webview del reproductor se oculta: no recibe teclado ni
-//! clics y no se ve lo que había.
+//! It is another webview (a child of the main window) with its own page
+//! (`https://ytmp.localhost/lock`), its own closed IPC protocol
+//! (`ipc::parse_lock`) and navigation pinned to that page. While locked, the
+//! player's webview is hidden: it gets no keyboard or clicks and what was on
+//! screen cannot be seen.
 
 use serde::Serialize;
 use tao::{event_loop::EventLoopProxy, window::Window};
@@ -21,17 +21,17 @@ use crate::{
 
 const URL: &str = "https://ytmp.localhost/lock";
 
-/// Lo que muestra la página.
+/// What the page shows.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Screen {
-    /// `unlock`, `verify` (para cambiar el bloqueo) o `new-pin`.
+    /// `unlock`, `verify` (to change the lock) or `new-pin`.
     pub stage: &'static str,
-    /// `hello` o `pin`.
+    /// `hello` or `pin`.
     pub method: &'static str,
     pub busy: bool,
     pub error: Option<String>,
-    /// Segundos de espera por intentos fallidos.
+    /// Seconds to wait after failed attempts.
     pub wait: u64,
     pub can_cancel: bool,
 }
@@ -68,14 +68,14 @@ impl LockView {
             .with_url(URL)
             .with_bounds(full_bounds(window))
             .with_visible(false)
-            .with_background_color((13, 17, 36, 255))
+            .with_background_color((3, 4, 94, 255))
             .with_custom_protocol("ytmp".into(), move |_id, request| home::respond(&request, &home_state))
             .with_ipc_handler(move |request: Request<String>| {
                 if let Some(command) = ipc::parse_lock(request.body()) {
                     let _ = proxy.send_event(UserEvent::Command(command));
                 }
             })
-            // Fija la página: nada de enlaces ni redirecciones.
+            // Pins the page: no links or redirects.
             .with_navigation_handler(|url| url == URL)
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_download_started_handler(|_, _| false)
@@ -86,7 +86,7 @@ impl LockView {
             builder = builder
                 .with_environment(main.environment())
                 .with_browser_extensions_enabled(true)
-                .with_additional_browser_args(crate::webview::BROWSER_ARGS)
+                .with_additional_browser_args(crate::webview::browser_args())
                 .with_https_scheme(true)
                 .with_default_context_menus(false);
         }
@@ -99,7 +99,7 @@ impl LockView {
                 true
             }
             Err(err) => {
-                eprintln!("no se pudo crear la pantalla de bloqueo: {err}");
+                eprintln!("could not create the lock screen: {err}");
                 false
             }
         }
@@ -121,10 +121,18 @@ impl LockView {
         self.visible = false;
     }
 
-    /// Tras redimensionar la ventana.
+    /// After the window is resized.
     pub fn resize(&self, window: &Window) {
         if let (Some(webview), true) = (&self.webview, self.visible) {
             let _ = webview.set_bounds(full_bounds(window));
+        }
+    }
+
+    /// After a language change: the page is served again with the new
+    /// strings (it asks for the state when it loads).
+    pub fn relocalize(&self) {
+        if let Some(webview) = &self.webview {
+            let _ = webview.load_url(URL);
         }
     }
 

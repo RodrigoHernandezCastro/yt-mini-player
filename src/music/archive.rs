@@ -1,22 +1,23 @@
-//! Internet Archive: búsqueda y descarga de música con licencia libre.
+//! Internet Archive: searching and downloading openly licensed music.
 //!
-//! Solo se ofrece lo que el Archive marca con una licencia que permite
-//! copiar y conservar la obra: Creative Commons BY, BY-SA, BY-ND, CC0 y
-//! dominio público. Las licencias *NoComercial* (NC) quedan fuera porque la
-//! descarga forma parte de un plan de pago. El filtro va en la consulta y se
-//! vuelve a comprobar aquí con cada resultado.
+//! Only what the Archive marks with a license that allows copying and
+//! keeping the work is offered: Creative Commons BY, BY-SA, BY-ND, CC0 and
+//! public domain. *NonCommercial* (NC) licenses are left out because
+//! downloading is part of a paid plan. The filter goes in the query and is
+//! checked again here for every result.
 //!
-//! Normas de uso que se respetan: User-Agent propio, pocas descargas a la
-//! vez, espera ante 429 y nada de rastreos masivos (solo lo que el usuario
-//! pide).
+//! Usage rules that are respected: an own User-Agent, few downloads at a
+//! time, waiting on 429 and no mass crawling (only what the user asks for).
 
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::i18n::Message;
+
 pub const BASE: &str = "https://archive.org";
 pub const ROWS: u32 = 30;
 
-/// Licencias aceptadas.
+/// Accepted licenses (the page names them and explains their terms).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum License {
     PublicDomain,
@@ -27,7 +28,7 @@ pub enum License {
 }
 
 impl License {
-    /// Lee la URL de licencia del Archive (`http://creativecommons.org/licenses/by-sa/3.0/us/`).
+    /// Reads the Archive's license URL (`http://creativecommons.org/licenses/by-sa/3.0/us/`).
     pub fn from_url(url: &str) -> Option<Self> {
         let u = url.trim().to_ascii_lowercase();
         let u = u.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.");
@@ -49,34 +50,26 @@ impl License {
         None
     }
 
+    /// The license's standard short name, as stored with downloaded songs
+    /// (the page shows "Public domain" in the user's language).
     pub fn label(self) -> &'static str {
         match self {
-            License::PublicDomain => "Dominio público",
+            License::PublicDomain => "Public domain",
             License::Cc0 => "CC0",
             License::By => "CC BY",
             License::BySa => "CC BY-SA",
             License::ByNd => "CC BY-ND",
         }
     }
-
-    /// Qué hay que hacer al usar la obra.
-    pub fn terms(self) -> &'static str {
-        match self {
-            License::PublicDomain | License::Cc0 => "Sin restricciones.",
-            License::By => "Cita a la autoría si la compartes.",
-            License::BySa => "Cita a la autoría; si la modificas, comparte con la misma licencia.",
-            License::ByNd => "Cita a la autoría; no la distribuyas modificada.",
-        }
-    }
 }
 
-/// Filtro de licencias para la consulta.
+/// License filter for the query.
 const LICENSE_FILTER: &str = "licenseurl:(*creativecommons.org/licenses/by/* OR *creativecommons.org/licenses/by-sa/* \
      OR *creativecommons.org/licenses/by-nd/* OR *creativecommons.org/publicdomain/*)";
-/// Fuera audiolibros, radio y podcasts: se busca música.
+/// No audiobooks, radio or podcasts: the search is for music.
 const NOT_MUSIC: &str = "NOT collection:(librivoxaudio OR audio_bookspoetry OR podcasts OR radioprograms OR oldtimeradio)";
 
-/// Escapa lo que el usuario escribe (sin operadores ni comodines suyos).
+/// Escapes what the user types (none of their operators or wildcards).
 pub fn escape_query(text: &str) -> String {
     let words: Vec<String> = text
         .split_whitespace()
@@ -99,7 +92,7 @@ pub fn encode_component(text: &str) -> String {
     url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
 }
 
-/// URL de búsqueda. `popular` ordena por descargas; si no, por relevancia.
+/// Search URL. `popular` sorts by downloads; otherwise by relevance.
 pub fn search_url(base: &str, text: &str, page: u32, popular: bool) -> Option<String> {
     let words = escape_query(text);
     if words.is_empty() {
@@ -117,7 +110,7 @@ pub fn search_url(base: &str, text: &str, page: u32, popular: bool) -> Option<St
     Some(url)
 }
 
-/// El Archive devuelve a veces texto y a veces una lista de textos.
+/// The Archive sometimes returns a text and sometimes a list of texts.
 fn text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -143,7 +136,7 @@ pub struct Hit {
     pub year: String,
 }
 
-/// Identificador del Archive: letras, números, `.`, `-` y `_`.
+/// An Archive identifier: letters, digits, `.`, `-` and `_`.
 pub fn is_identifier(id: &str) -> bool {
     (1..=100).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
@@ -176,11 +169,11 @@ pub fn parse_search(json: &Value) -> (u64, Vec<Hit>) {
     (total, hits)
 }
 
-/// Una canción del álbum (ya elegido el formato).
+/// A song of the album (format already chosen).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteTrack {
-    /// Nombre del archivo en el Archive.
+    /// The file's name on the Archive.
     pub file: String,
     pub title: String,
     pub artist: String,
@@ -190,7 +183,7 @@ pub struct RemoteTrack {
     pub size: u64,
     pub sha1: String,
     pub md5: String,
-    /// Extensión (`mp3`, `ogg`, `flac`).
+    /// Extension (`mp3`, `ogg`, `flac`).
     pub format: String,
 }
 
@@ -202,15 +195,13 @@ pub struct Item {
     pub creator: String,
     pub license: License,
     pub license_label: &'static str,
-    pub license_terms: &'static str,
     pub license_url: String,
     pub tracks: Vec<RemoteTrack>,
-    /// Imagen de portada del álbum (archivo del propio item), si hay.
+    /// The album's cover image (a file of the item itself), if any.
     pub cover_file: Option<String>,
 }
 
-/// Formatos de audio del Archive que el motor reproduce: (formato, extensión,
-/// ¿sin pérdida?).
+/// Archive audio formats the engine plays: (format, extension, lossless?).
 fn audio_format(format: &str, name: &str) -> Option<(&'static str, bool)> {
     let f = format.to_ascii_lowercase();
     let ext = name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
@@ -231,8 +222,8 @@ fn audio_format(format: &str, name: &str) -> Option<(&'static str, bool)> {
     }
 }
 
-/// Orden de preferencia: compacto = MP3 VBR > MP3 > Ogg > FLAC > WAV;
-/// mejor = FLAC > WAV > MP3 VBR > MP3 > Ogg. Menos es mejor.
+/// Order of preference: compact = VBR MP3 > MP3 > Ogg > FLAC > WAV;
+/// best = FLAC > WAV > VBR MP3 > MP3 > Ogg. Lower is better.
 fn preference(format: &str, ext: &str, best: bool) -> u32 {
     let f = format.to_ascii_lowercase();
     let vbr = f.contains("vbr");
@@ -254,7 +245,7 @@ fn number(value: &Value) -> Option<f64> {
     match value {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => {
-            // "263.71" o "4:23"
+            // "263.71" or "4:23"
             if let Some((m, s)) = s.split_once(':') {
                 Some(m.trim().parse::<f64>().ok()? * 60.0 + s.trim().parse::<f64>().ok()?)
             } else {
@@ -271,21 +262,21 @@ fn track_number(value: &Value) -> Option<u32> {
     text(value).split('/').next()?.trim().parse().ok().filter(|&n| n > 0 && n < 1000)
 }
 
-/// Interpreta los metadatos de un item: una canción por grabación original,
-/// en el formato preferido. `None` si la licencia no es aceptable.
-pub fn parse_item(json: &Value, best: bool) -> Result<Item, String> {
+/// Interprets an item's metadata: one song per original recording, in the
+/// preferred format. An error if the license is not acceptable.
+pub fn parse_item(json: &Value, best: bool) -> Result<Item, Message> {
     let meta = &json["metadata"];
     let id = text(&meta["identifier"]);
     if !is_identifier(&id) {
-        return Err("el Archive no devolvió ese álbum".into());
+        return Err(msg!("music.album.not_returned"));
     }
     let license_url = text(&meta["licenseurl"]);
-    let license = License::from_url(&license_url).ok_or("este álbum no tiene una licencia libre que permita descargarlo")?;
+    let license = License::from_url(&license_url).ok_or_else(|| msg!("music.album.not_free"))?;
     let item_title = clean(text(&meta["title"]), 200);
     let item_creator = clean(text(&meta["creator"]), 120);
     let files = json["files"].as_array().cloned().unwrap_or_default();
 
-    // Agrupa derivados con su original: la clave es el nombre del original.
+    // Groups derivatives with their original: the key is the original's name.
     let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
     for f in &files {
         let name = text(&f["name"]);
@@ -312,7 +303,7 @@ pub fn parse_item(json: &Value, best: bool) -> Result<Item, String> {
             })?;
             let name = text(&chosen["name"]);
             let (ext, _) = audio_format(&text(&chosen["format"]), &name)?;
-            // Las etiquetas suelen estar en el original.
+            // The tags are usually on the original.
             let source = members.iter().find(|f| text(&f["name"]) == *original).copied().unwrap_or(chosen);
             let pick = |key: &str| {
                 let v = text(&chosen[key]);
@@ -339,8 +330,8 @@ pub fn parse_item(json: &Value, best: bool) -> Result<Item, String> {
             })
         })
         .collect();
-    // Por número de pista si todas lo tienen; si no, por nombre de archivo
-    // (que en los sellos suele empezar por el número).
+    // By track number if they all have one; otherwise by file name (which
+    // labels usually start with the number).
     if tracks.iter().all(|t| t.track_no.is_some()) {
         tracks.sort_by(|a, b| a.track_no.cmp(&b.track_no).then_with(|| natural_cmp(&a.file, &b.file)));
     } else {
@@ -365,14 +356,13 @@ pub fn parse_item(json: &Value, best: bool) -> Result<Item, String> {
         creator: item_creator,
         license,
         license_label: license.label(),
-        license_terms: license.terms(),
         license_url,
         tracks,
         cover_file,
     })
 }
 
-/// "Pista 2" antes que "Pista 10".
+/// "Track 2" before "Track 10".
 fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let key = |s: &str| -> Vec<(u8, u64, String)> {
         let mut out = Vec::new();
@@ -403,7 +393,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     key(a).cmp(&key(b))
 }
 
-/// Ruta de descarga de un archivo (cada parte codificada).
+/// A file's download path (each part encoded).
 pub fn download_url(base: &str, item: &str, file: &str) -> String {
     let path: Vec<String> = file
         .split('/')
@@ -429,8 +419,8 @@ pub mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Respuesta real (recortada) de /metadata/TAM033-Ronan_Dec, con
-    /// derivados añadidos como los genera el Archive.
+    /// A real (trimmed) answer of /metadata/TAM033-Ronan_Dec, with
+    /// derivatives added the way the Archive generates them.
     pub fn sample_item() -> Value {
         json!({
           "created": 1791974020, "d1": "ia601500.us.archive.org", "dir": "/28/items/TAM033-Ronan_Dec", "files_count": 12,
@@ -502,16 +492,16 @@ pub mod tests {
         let json = json!({ "responseHeader": { "status": 0 }, "response": { "numFound": 2959, "start": 0, "docs": [
             { "identifier": "TAM033-Ronan_Dec", "title": "Ronan Dec. - Hirnwald EP [TAM033]", "creator": "Ronan Dec.",
               "licenseurl": "http://creativecommons.org/licenses/by-sa/2.0/de/", "downloads": 191994 },
-            { "identifier": "TFN147", "title": "[TFN147] fabioRosho - Untitled", "creator": ["fabioRosho", "Otro"],
+            { "identifier": "TFN147", "title": "[TFN147] fabioRosho - Untitled", "creator": ["fabioRosho", "Other"],
               "licenseurl": "http://creativecommons.org/licenses/by-sa/3.0/us/", "downloads": 148357, "year": "2009" },
             { "identifier": "nc-album", "title": "NC", "licenseurl": "http://creativecommons.org/licenses/by-nc/3.0/" },
-            { "identifier": "../malo", "title": "x", "licenseurl": "http://creativecommons.org/licenses/by/3.0/" }
+            { "identifier": "../bad", "title": "x", "licenseurl": "http://creativecommons.org/licenses/by/3.0/" }
         ]}});
         let (total, hits) = parse_search(&json);
         assert_eq!(total, 2959);
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].license_label, "CC BY-SA");
-        assert_eq!(hits[1].creator, "fabioRosho, Otro");
+        assert_eq!(hits[1].creator, "fabioRosho, Other");
         assert_eq!(hits[1].year, "2009");
         assert_eq!(parse_search(&json!({})).1.len(), 0);
     }
@@ -522,7 +512,7 @@ pub mod tests {
         assert_eq!(item.license, License::BySa);
         assert_eq!(item.cover_file.as_deref(), Some("TAM033-Cover.jpg"));
         let files: Vec<&str> = item.tracks.iter().map(|t| t.file.as_str()).collect();
-        // Orden: por número de pista o natural (1, 2, 10); compacto = MP3.
+        // Order: by track number or natural (1, 2, 10); compact = MP3.
         assert_eq!(files, ["TAM033-Ronan_Dec-1-Supernova.mp3", "TAM033-Ronan_Dec-2-Waehrend_du_schliefst.mp3", "TAM033-Ronan_Dec-10-Final.mp3"]);
         let first = &item.tracks[0];
         assert_eq!((first.artist.as_str(), first.album.as_str()), ("ronan dec", "Hirnwald EP"));
@@ -530,27 +520,27 @@ pub mod tests {
         assert_eq!((first.size, first.format.as_str()), (8_438_638, "mp3"));
         assert!((first.duration - 263.71).abs() < 0.01);
         let last = &item.tracks[2];
-        assert_eq!(last.title, "Final", "el derivado toma las etiquetas del original");
+        assert_eq!(last.title, "Final", "the derivative takes the original's tags");
         assert_eq!(last.track_no, Some(10));
         assert_eq!(item.tracks[1].artist, "ronan dec");
 
         let best = parse_item(&sample_item(), true).unwrap();
         let files: Vec<&str> = best.tracks.iter().map(|t| t.file.as_str()).collect();
-        assert!(files.contains(&"TAM033-Ronan_Dec-10-Final.flac"), "mejor calidad = FLAC: {files:?}");
+        assert!(files.contains(&"TAM033-Ronan_Dec-10-Final.flac"), "best quality = FLAC: {files:?}");
         assert!((best.tracks.iter().find(|t| t.format == "flac").unwrap().duration - 250.0).abs() < 0.01, "4:10");
 
         let mut nc = sample_item();
         nc["metadata"]["licenseurl"] = "http://creativecommons.org/licenses/by-nc-sa/3.0/".into();
-        assert!(parse_item(&nc, false).is_err());
-        assert!(parse_item(&json!({"metadata": {}}), false).is_err());
+        assert_eq!(parse_item(&nc, false).unwrap_err(), msg!("music.album.not_free"));
+        assert_eq!(parse_item(&json!({"metadata": {}}), false).unwrap_err(), msg!("music.album.not_returned"));
     }
 
     #[test]
     fn urls() {
-        assert_eq!(download_url(BASE, "TAM033-Ronan_Dec", "Disco 1/01 Tema #1.mp3"), "https://archive.org/download/TAM033-Ronan_Dec/Disco%201/01%20Tema%20%231.mp3");
+        assert_eq!(download_url(BASE, "TAM033-Ronan_Dec", "Disc 1/01 Song #1.mp3"), "https://archive.org/download/TAM033-Ronan_Dec/Disc%201/01%20Song%20%231.mp3");
         assert_eq!(metadata_url(BASE, "TFN147"), "https://archive.org/metadata/TFN147");
         assert_eq!(thumbnail_url(BASE, "TFN147"), "https://archive.org/services/img/TFN147");
         assert!(is_identifier("TAM033-Ronan_Dec") && !is_identifier("a/b") && !is_identifier(""));
-        assert_eq!(natural_cmp("Pista 2", "Pista 10"), std::cmp::Ordering::Less);
+        assert_eq!(natural_cmp("Track 2", "Track 10"), std::cmp::Ordering::Less);
     }
 }

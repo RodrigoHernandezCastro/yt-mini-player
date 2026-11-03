@@ -1,41 +1,44 @@
-//! Licencias de pago con Lemon Squeezy (API de licencias).
+//! Paid licenses with Lemon Squeezy (License API).
 //!
-//! - **Gratis**: biblioteca, reproductor, duplicados y **2 playlists**.
-//! - **Descargas** (suscripción mensual): descargar canciones y álbumes, y
+//! - **Free**: library, player, duplicates and **2 playlists**.
+//! - **Downloads** (monthly subscription): download songs and albums, and
 //!   **5 playlists**.
-//! - **De por vida** (pago único): todo, con **playlists ilimitadas**.
+//! - **Lifetime** (one-off payment): everything, with **unlimited playlists**.
 //!
-//! Cobro **no invasivo**:
-//! - Nada se bloquea de golpe ni hay ventanas que interrumpan: los límites
-//!   son de cantidad y se explican en línea, donde se usan.
-//! - Lo creado nunca se quita: si la suscripción termina, las playlists de
-//!   más siguen ahí (se pueden escuchar, editar y borrar); solo no se crean
-//!   nuevas por encima del límite.
-//! - Casi sin contacto con la tienda: la compra es en el navegador; la app
-//!   activa la clave una vez y después solo la comprueba cada 7 días (la
-//!   suscripción, que puede cancelarse) o cada 30 (la de por vida, por si
-//!   hubo reembolso). Sin conexión, la suscripción sigue 14 días y la de por
-//!   vida no caduca nunca. Nada de telemetría ni cuentas.
+//! **Non-invasive** charging:
+//! - Nothing gets locked all of a sudden and no windows interrupt: the
+//!   limits are about quantity and are explained inline, where they apply.
+//! - What was created is never taken away: if the subscription ends, the
+//!   extra playlists stay (they can be played, edited and deleted); only new
+//!   ones above the limit cannot be created.
+//! - Hardly any contact with the store: buying happens in the browser; the
+//!   app activates the key once and afterwards only checks it every 7 days
+//!   (the subscription, which can be cancelled) or every 30 (lifetime, in
+//!   case of a refund). Offline, the subscription keeps working 14 days and
+//!   lifetime never expires. No telemetry or accounts.
 //!
-//! Se comprueba que la clave sea de *esta* tienda y de uno de *estos*
-//! productos: la API acepta claves de cualquier tienda. La clave y el estado
-//! se guardan cifrados en la bóveda.
+//! The key is checked to belong to *this* store and one of *these*
+//! products: the API accepts keys from any store. The key and its state are
+//! stored encrypted in the vault.
 //!
-//! Los datos de la tienda se fijan al compilar (variables de entorno, ver
-//! README). Sin ellos, las funciones de pago quedan bloqueadas y la página
-//! lo explica; con `YTMP_DEV_UNLOCK=1` (solo para desarrollo) todo se
-//! desbloquea y la página lo avisa en grande.
+//! The store data is fixed at build time (environment variables, see
+//! README). Without it, the paid features stay locked and the page explains
+//! why; with `YTMP_DEV_UNLOCK=1` (development only) everything unlocks and
+//! the page says so in big letters.
 
 use serde::{Deserialize, Serialize};
 
-use crate::net::{Http, NetError};
+use crate::{
+    i18n::Message,
+    net::{Http, NetError},
+};
 
 pub const API: &str = "https://api.lemonsqueezy.com";
 const DAY: u64 = 24 * 60 * 60;
 const REVALIDATE_SUBSCRIPTION: u64 = 7 * DAY;
 const REVALIDATE_LIFETIME: u64 = 30 * DAY;
 const GRACE_SUBSCRIPTION: u64 = 14 * DAY;
-/// Playlists por plan (`None` = sin límite).
+/// Playlists per plan (`None` = no limit).
 pub const FREE_PLAYLISTS: u32 = 2;
 pub const DOWNLOADS_PLAYLISTS: u32 = 5;
 
@@ -48,19 +51,19 @@ pub enum Plan {
     Lifetime,
 }
 
-/// Lo que permite cada plan. Para cambiar qué incluye cada uno, este es el
-/// único sitio.
+/// What each plan allows. This is the only place to change what each one
+/// includes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entitlements {
-    /// Descargar canciones (sueltas o el álbum entero).
+    /// Download songs (single ones or the whole album).
     pub download: bool,
-    /// Cuántas playlists se pueden tener (`None` = sin límite).
+    /// How many playlists one can have (`None` = no limit).
     pub max_playlists: Option<u32>,
 }
 
 impl Entitlements {
-    /// ¿Se puede crear una playlist más teniendo ya `existing`?
+    /// Can one more playlist be created when there are `existing` already?
     pub fn can_add_playlist(&self, existing: usize) -> bool {
         self.max_playlists.is_none_or(|max| existing < max as usize)
     }
@@ -75,7 +78,7 @@ impl Plan {
         }
     }
 
-    /// Cuánto vale la última validación sin conexión (`None` = siempre).
+    /// How long the last validation lasts offline (`None` = forever).
     fn grace(self) -> Option<u64> {
         match self {
             Plan::Lifetime => None,
@@ -91,17 +94,17 @@ impl Plan {
     }
 }
 
-/// Datos de la tienda (al compilar).
+/// Store data (at build time).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreConfig {
     pub store_id: u64,
-    /// Productos (o variantes) del plan Descargas.
+    /// Products (or variants) of the Downloads plan.
     pub downloads: Vec<u64>,
-    /// Productos (o variantes) del plan De por vida.
+    /// Products (or variants) of the Lifetime plan.
     pub lifetime: Vec<u64>,
     pub checkout_downloads: Option<String>,
     pub checkout_lifetime: Option<String>,
-    /// Portal de cliente (gestionar o cancelar la suscripción).
+    /// Customer portal (manage or cancel the subscription).
     pub portal: Option<String>,
 }
 
@@ -109,7 +112,7 @@ fn ids(text: Option<&str>) -> Vec<u64> {
     text.unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect()
 }
 
-/// Solo https; cualquier otra cosa se ignora.
+/// https only; anything else is ignored.
 fn https(text: Option<&str>) -> Option<String> {
     let url = url::Url::parse(text?.trim()).ok()?;
     (url.scheme() == "https" && url.host_str().is_some()).then(|| url.to_string())
@@ -136,7 +139,7 @@ impl StoreConfig {
         (!config.downloads.is_empty() || !config.lifetime.is_empty()).then_some(config)
     }
 
-    /// La de esta compilación.
+    /// This build's.
     pub fn built_in() -> Option<Self> {
         Self::from_values(
             option_env!("YTMP_LS_STORE_ID"),
@@ -148,7 +151,7 @@ impl StoreConfig {
         )
     }
 
-    /// Plan al que pertenece una compra (por producto o variante).
+    /// The plan a purchase belongs to (by product or variant).
     pub fn plan_for(&self, product_id: u64, variant_id: u64) -> Option<Plan> {
         let has = |list: &[u64]| list.contains(&product_id) || list.contains(&variant_id);
         if has(&self.lifetime) {
@@ -161,12 +164,12 @@ impl StoreConfig {
     }
 }
 
-/// ¿Compilación de desarrollo con todo desbloqueado?
+/// A development build with everything unlocked?
 pub fn dev_unlock() -> bool {
     option_env!("YTMP_DEV_UNLOCK") == Some("1")
 }
 
-/// Lo que se guarda (cifrado) de la licencia activada en este equipo.
+/// What is stored (encrypted) of the license activated on this PC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LicenseRecord {
@@ -177,15 +180,15 @@ pub struct LicenseRecord {
     pub status: String,
     pub product_name: String,
     pub customer_email: String,
-    /// Fecha de caducidad (ISO 8601) si la hay.
+    /// Expiry date (ISO 8601) if any.
     pub expires_at: Option<String>,
-    /// Última validación correcta (segundos Unix).
+    /// Last successful validation (Unix seconds).
     pub validated_at: u64,
 }
 
 impl LicenseRecord {
-    /// Plan vigente ahora: el de la licencia si está activa, no caducó y la
-    /// última validación no es demasiado antigua.
+    /// The plan in force now: the license's if it is active, has not expired
+    /// and the last validation is not too old.
     pub fn effective_plan(&self, now: u64) -> Plan {
         let active = self.status == "active" || self.status == "inactive";
         let expired = self.expires_at.as_deref().and_then(parse_iso8601).is_some_and(|t| t <= now);
@@ -197,14 +200,14 @@ impl LicenseRecord {
         }
     }
 
-    /// ¿Toca comprobarla con la tienda? (Una clave que dejó de valer se
-    /// vuelve a comprobar solo si el usuario lo pide.)
+    /// Is it time to check it with the store? (A key that stopped being
+    /// valid is only checked again if the user asks.)
     pub fn needs_validation(&self, now: u64) -> bool {
         self.status != "invalid" && now.saturating_sub(self.validated_at) >= self.plan.revalidate_after()
     }
 }
 
-/// Correo con la parte local oculta (a***@dominio).
+/// Email with the local part hidden (a***@domain).
 pub fn mask_email(email: &str) -> String {
     match email.split_once('@') {
         Some((user, domain)) if !user.is_empty() => {
@@ -215,7 +218,7 @@ pub fn mask_email(email: &str) -> String {
     }
 }
 
-/// Clave con todo oculto menos el final (para mostrarla).
+/// The key with everything hidden but the end (to show it).
 pub fn mask_key(key: &str) -> String {
     let tail: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
     if key.chars().count() <= 4 {
@@ -225,14 +228,14 @@ pub fn mask_key(key: &str) -> String {
     }
 }
 
-/// Formato razonable de clave (las de Lemon Squeezy son UUID en mayúsculas;
-/// se aceptan otras formas por si cambian, pero sin espacios raros).
+/// A reasonable key format (Lemon Squeezy's are uppercase UUIDs; other
+/// shapes are accepted in case they change, but no odd spaces).
 pub fn plausible_key(key: &str) -> bool {
     let len = key.len();
     (8..=128).contains(&len) && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// ISO 8601 (`2026-01-24T14:15:07.000000Z`) a segundos Unix (UTC).
+/// ISO 8601 (`2026-01-24T14:15:07.000000Z`) to Unix seconds (UTC).
 pub fn parse_iso8601(text: &str) -> Option<u64> {
     let text = text.trim();
     let (date, time) = text.split_once(['T', ' '])?;
@@ -246,7 +249,7 @@ pub fn parse_iso8601(text: &str) -> Option<u64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 {
         return None;
     }
-    // Días desde 1970-01-01 (algoritmo de Howard Hinnant).
+    // Days since 1970-01-01 (Howard Hinnant's algorithm).
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -259,43 +262,44 @@ pub fn parse_iso8601(text: &str) -> Option<u64> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LicenseError {
-    /// No hay conexión: se mantiene lo que había (dentro del margen).
+    /// No connection: what there was is kept (within the grace period). The
+    /// detail is for logs.
     Offline(String),
-    /// La tienda dice que no (o la clave no es de esta app). Mensaje para el
-    /// usuario.
-    Rejected(String),
+    /// The store says no (or the key is not for this app).
+    Rejected(Message),
 }
 
-impl std::fmt::Display for LicenseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl LicenseError {
+    /// For the user, in the language the page shows.
+    pub fn message(&self) -> Message {
         match self {
-            LicenseError::Offline(e) => write!(f, "No se pudo contactar con la tienda ({e}). Inténtalo más tarde."),
-            LicenseError::Rejected(e) => f.write_str(e),
+            LicenseError::Offline(_) => msg!("music.license.offline"),
+            LicenseError::Rejected(message) => message.clone(),
         }
     }
 }
 
-/// Traduce los mensajes de error conocidos de la API.
-fn friendly(error: &str, status: &str) -> String {
+/// The API's known error messages, explained (the API answers in English).
+fn friendly(error: &str, status: &str) -> Message {
     let e = error.to_ascii_lowercase();
     if status == "expired" || e.contains("expired") {
-        "La licencia caducó: la suscripción terminó. Puedes renovarla desde la página de compra.".into()
+        msg!("music.license.expired")
     } else if status == "disabled" || e.contains("disabled") {
-        "La licencia está desactivada (reembolso o cancelación).".into()
+        msg!("music.license.disabled")
     } else if e.contains("activation limit") {
-        "Esta licencia ya está activada en el máximo de equipos. Desactívala en otro equipo y vuelve a intentarlo.".into()
+        msg!("music.license.limit")
     } else if e.contains("instance") {
-        "Esta activación ya no es válida en este equipo. Vuelve a activar la licencia.".into()
+        msg!("music.license.instance")
     } else if e.contains("not found") || e.contains("invalid") {
-        "Esa clave de licencia no existe. Cópiala tal cual del correo de compra.".into()
+        msg!("music.license.not_found")
     } else if error.is_empty() {
-        "La tienda no aceptó la licencia.".into()
+        msg!("music.license.rejected")
     } else {
-        format!("La tienda no aceptó la licencia: {error}")
+        msg!("music.license.rejected_detail", detail = error.chars().take(200).collect::<String>())
     }
 }
 
-/// Interpreta la respuesta de `activate` o `validate`.
+/// Interprets the answer of `activate` or `validate`.
 pub fn interpret(
     config: &StoreConfig,
     status_code: u16,
@@ -312,11 +316,11 @@ pub fn interpret(
     }
     let meta = &json["meta"];
     if meta["store_id"].as_u64() != Some(config.store_id) {
-        return Err(LicenseError::Rejected("Esa licencia no es de YT Mini Player.".into()));
+        return Err(LicenseError::Rejected(msg!("music.license.other_store")));
     }
     let plan = config
         .plan_for(meta["product_id"].as_u64().unwrap_or(0), meta["variant_id"].as_u64().unwrap_or(0))
-        .ok_or_else(|| LicenseError::Rejected("Esa licencia es de otro producto de la tienda.".into()))?;
+        .ok_or_else(|| LicenseError::Rejected(msg!("music.license.other_product")))?;
     let record = LicenseRecord {
         key: key.to_owned(),
         instance_id: json["instance"]["id"].as_str().unwrap_or(known_instance).to_owned(),
@@ -328,7 +332,7 @@ pub fn interpret(
         validated_at: now,
     };
     if record.instance_id.is_empty() {
-        return Err(LicenseError::Rejected("La tienda no devolvió la activación.".into()));
+        return Err(LicenseError::Rejected(msg!("music.license.no_instance")));
     }
     if record.effective_plan(now) == Plan::Free {
         return Err(LicenseError::Rejected(friendly("", &status)));
@@ -340,11 +344,11 @@ fn offline(err: NetError) -> LicenseError {
     LicenseError::Offline(err.to_string())
 }
 
-/// Activa la clave en este equipo.
+/// Activates the key on this PC.
 pub fn activate(http: &Http, api: &str, config: &StoreConfig, key: &str, instance_name: &str, now: u64) -> Result<LicenseRecord, LicenseError> {
     let key = key.trim();
     if !plausible_key(key) {
-        return Err(LicenseError::Rejected("Esa clave no tiene el formato de una licencia.".into()));
+        return Err(LicenseError::Rejected(msg!("music.license.bad_format")));
     }
     let (status, json) = http
         .post_form(&format!("{api}/v1/licenses/activate"), &[("license_key", key), ("instance_name", instance_name)])
@@ -352,7 +356,7 @@ pub fn activate(http: &Http, api: &str, config: &StoreConfig, key: &str, instanc
     match interpret(config, status, &json, key, "", now) {
         Ok(record) => Ok(record),
         Err(err) => {
-            // Activada pero no es de esta app: se libera esa activación.
+            // Activated but not for this app: that activation is released.
             if let Some(instance) = json["instance"]["id"].as_str().filter(|_| json["activated"] == true) {
                 let _ = http.post_form(&format!("{api}/v1/licenses/deactivate"), &[("license_key", key), ("instance_id", instance)]);
             }
@@ -361,7 +365,7 @@ pub fn activate(http: &Http, api: &str, config: &StoreConfig, key: &str, instanc
     }
 }
 
-/// Valida la activación guardada.
+/// Validates the saved activation.
 pub fn validate(http: &Http, api: &str, config: &StoreConfig, record: &LicenseRecord, now: u64) -> Result<LicenseRecord, LicenseError> {
     let (status, json) = http
         .post_form(
@@ -372,7 +376,7 @@ pub fn validate(http: &Http, api: &str, config: &StoreConfig, record: &LicenseRe
     interpret(config, status, &json, &record.key, &record.instance_id, now)
 }
 
-/// Libera la activación de este equipo.
+/// Releases this PC's activation.
 pub fn deactivate(http: &Http, api: &str, record: &LicenseRecord) -> Result<(), LicenseError> {
     let (status, json) = http
         .post_form(
@@ -387,7 +391,7 @@ pub fn deactivate(http: &Http, api: &str, record: &LicenseRecord) -> Result<(), 
     }
 }
 
-/// Nombre de la activación (lo ve el cliente en su portal).
+/// Name of the activation (the customer sees it in their portal).
 pub fn instance_name() -> String {
     let host = std::env::var("COMPUTERNAME").unwrap_or_default();
     let host: String = host.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
@@ -407,7 +411,7 @@ mod tests {
     const NOW: u64 = 1_790_000_000;
 
     fn config() -> StoreConfig {
-        StoreConfig::from_values(Some("1234"), Some("501"), Some("502, 9502"), Some("https://tienda.lemonsqueezy.com/buy/abc"), Some("javascript:alert(1)"), None).unwrap()
+        StoreConfig::from_values(Some("1234"), Some("501"), Some("502, 9502"), Some("https://shop.lemonsqueezy.com/buy/abc"), Some("javascript:alert(1)"), None).unwrap()
     }
 
     fn response(store: u64, product: u64, status: &str, expires: Option<&str>) -> serde_json::Value {
@@ -416,7 +420,7 @@ mod tests {
             "license_key": { "id": 1, "status": status, "key": "K", "activation_limit": 3, "activation_usage": 1,
                              "created_at": "2026-01-24T14:15:07.000000Z", "expires_at": expires },
             "instance": { "id": "inst-1", "name": "YT Mini Player - PC", "created_at": "2026-01-24T14:15:07.000000Z" },
-            "meta": { "store_id": store, "order_id": 2, "order_item_id": 3, "product_id": product, "product_name": "De por vida",
+            "meta": { "store_id": store, "order_id": 2, "order_item_id": 3, "product_id": product, "product_name": "Lifetime",
                       "variant_id": 77, "variant_name": "Default", "customer_id": 6, "customer_name": "Ana", "customer_email": "ana@example.com" }
         })
     }
@@ -427,13 +431,13 @@ mod tests {
         assert_eq!(c.store_id, 1234);
         assert_eq!(c.downloads, vec![501]);
         assert_eq!(c.lifetime, vec![502, 9502]);
-        assert_eq!(c.checkout_downloads.as_deref(), Some("https://tienda.lemonsqueezy.com/buy/abc"));
-        assert_eq!(c.checkout_lifetime, None, "solo https");
+        assert_eq!(c.checkout_downloads.as_deref(), Some("https://shop.lemonsqueezy.com/buy/abc"));
+        assert_eq!(c.checkout_lifetime, None, "https only");
         assert_eq!(c.plan_for(501, 0), Some(Plan::Downloads));
         assert_eq!(c.plan_for(0, 9502), Some(Plan::Lifetime));
         assert_eq!(c.plan_for(7, 8), None);
         assert!(StoreConfig::from_values(None, Some("1"), None, None, None, None).is_none());
-        assert!(StoreConfig::from_values(Some("1234"), None, Some(""), None, None, None).is_none(), "sin productos no hay tienda");
+        assert!(StoreConfig::from_values(Some("1234"), None, Some(""), None, None, None).is_none(), "no products, no store");
         assert!(StoreConfig::from_values(Some("0"), Some("1"), None, None, None, None).is_none());
     }
 
@@ -441,11 +445,11 @@ mod tests {
     fn plans_and_entitlements() {
         let free = Plan::Free.entitlements();
         assert!(!free.download);
-        assert!(free.can_add_playlist(0) && free.can_add_playlist(1) && !free.can_add_playlist(2), "2 gratis");
+        assert!(free.can_add_playlist(0) && free.can_add_playlist(1) && !free.can_add_playlist(2), "2 for free");
         let d = Plan::Downloads.entitlements();
-        assert!(d.download && d.can_add_playlist(4) && !d.can_add_playlist(5), "5 con la suscripción");
+        assert!(d.download && d.can_add_playlist(4) && !d.can_add_playlist(5), "5 with the subscription");
         let l = Plan::Lifetime.entitlements();
-        assert!(l.download && l.can_add_playlist(10_000) && l.max_playlists.is_none(), "ilimitadas de por vida");
+        assert!(l.download && l.can_add_playlist(10_000) && l.max_playlists.is_none(), "unlimited for lifetime");
     }
 
     #[test]
@@ -456,38 +460,40 @@ mod tests {
         assert_eq!(mask_email(&ok.customer_email), "a***@example.com");
 
         let other_store = interpret(&c, 200, &response(999, 502, "active", None), "K", "", NOW).unwrap_err();
-        assert_eq!(other_store, LicenseError::Rejected("Esa licencia no es de YT Mini Player.".into()));
+        assert_eq!(other_store, LicenseError::Rejected(msg!("music.license.other_store")));
         let other_product = interpret(&c, 200, &response(1234, 600, "active", None), "K", "", NOW).unwrap_err();
-        assert!(matches!(other_product, LicenseError::Rejected(m) if m.contains("otro producto")));
+        assert_eq!(other_product.message(), msg!("music.license.other_product"));
 
         let mut expired = response(1234, 501, "expired", Some("2026-01-01T00:00:00.000000Z"));
         expired["valid"] = false.into();
         expired["activated"] = serde_json::Value::Null;
-        assert!(matches!(interpret(&c, 200, &expired, "K", "", NOW).unwrap_err(), LicenseError::Rejected(m) if m.contains("caducó")));
-        // Activa según el estado pero con fecha pasada: caducada igual.
+        assert_eq!(interpret(&c, 200, &expired, "K", "", NOW).unwrap_err().message(), msg!("music.license.expired"));
+        // Active by its status but with a past date: expired all the same.
         let past = response(1234, 501, "active", Some("2020-01-01T00:00:00Z"));
         assert!(interpret(&c, 200, &past, "K", "", NOW).is_err());
 
         let not_found = serde_json::json!({ "activated": false, "error": "license_key not found.", "license_key": null, "meta": null });
-        assert!(matches!(interpret(&c, 404, &not_found, "K", "", NOW).unwrap_err(), LicenseError::Rejected(m) if m.contains("no existe")));
+        assert_eq!(interpret(&c, 404, &not_found, "K", "", NOW).unwrap_err().message(), msg!("music.license.not_found"));
         let limit = serde_json::json!({ "activated": false, "error": "This license key has reached the activation limit." });
-        assert!(matches!(interpret(&c, 400, &limit, "K", "", NOW).unwrap_err(), LicenseError::Rejected(m) if m.contains("máximo de equipos")));
+        assert_eq!(interpret(&c, 400, &limit, "K", "", NOW).unwrap_err().message(), msg!("music.license.limit"));
+        let odd = serde_json::json!({ "activated": false, "error": "Something new." });
+        assert_eq!(interpret(&c, 400, &odd, "K", "", NOW).unwrap_err().message(), msg!("music.license.rejected_detail", detail = "Something new."));
     }
 
     #[test]
     fn offline_grace_and_revalidation() {
         let mut r = LicenseRecord { plan: Plan::Downloads, status: "active".into(), validated_at: NOW, ..Default::default() };
         assert_eq!(r.effective_plan(NOW), Plan::Downloads);
-        assert!(!r.needs_validation(NOW + 6 * DAY), "la suscripción se comprueba una vez por semana");
+        assert!(!r.needs_validation(NOW + 6 * DAY), "the subscription is checked once a week");
         assert!(r.needs_validation(NOW + 7 * DAY));
-        assert_eq!(r.effective_plan(NOW + 13 * DAY), Plan::Downloads, "sin conexión casi dos semanas, sigue");
-        assert_eq!(r.effective_plan(NOW + 15 * DAY), Plan::Free, "dos semanas sin poder comprobarla: vuelve a Gratis");
+        assert_eq!(r.effective_plan(NOW + 13 * DAY), Plan::Downloads, "almost two weeks offline, still fine");
+        assert_eq!(r.effective_plan(NOW + 15 * DAY), Plan::Free, "two weeks without checking: back to Free");
         r.plan = Plan::Lifetime;
-        assert!(!r.needs_validation(NOW + 29 * DAY), "la de por vida, una vez al mes");
+        assert!(!r.needs_validation(NOW + 29 * DAY), "lifetime, once a month");
         assert!(r.needs_validation(NOW + 30 * DAY));
-        assert_eq!(r.effective_plan(NOW + 400 * DAY), Plan::Lifetime, "la de por vida no caduca sin conexión");
+        assert_eq!(r.effective_plan(NOW + 400 * DAY), Plan::Lifetime, "lifetime never expires offline");
         r.status = "invalid".into();
-        assert!(!r.needs_validation(NOW + 400 * DAY), "una clave rechazada no se reintenta sola");
+        assert!(!r.needs_validation(NOW + 400 * DAY), "a rejected key is not retried by itself");
         r.status = "disabled".into();
         assert_eq!(r.effective_plan(NOW), Plan::Free);
         r.status = "active".into();
@@ -502,7 +508,7 @@ mod tests {
         assert_eq!(parse_iso8601("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse_iso8601("2021-01-24T14:15:07.000000Z"), Some(1_611_497_707));
         assert_eq!(parse_iso8601("2000-02-29 12:00:00"), Some(951_825_600));
-        for bad in ["", "2021-13-01T00:00:00Z", "ayer", "2021-01-24", "2021-01-24T25:00:00Z"] {
+        for bad in ["", "2021-13-01T00:00:00Z", "yesterday", "2021-01-24", "2021-01-24T25:00:00Z"] {
             assert_eq!(parse_iso8601(bad), None, "{bad}");
         }
     }
@@ -514,7 +520,7 @@ mod tests {
             assert!(!plausible_key(bad), "{bad}");
         }
         assert_eq!(mask_key("38B1460A-5104-4067-A91D-77B872934D51"), "****-4D51");
-        assert_eq!(mask_email("sin-arroba"), "");
+        assert_eq!(mask_email("no-at-sign"), "");
     }
 
     #[test]
@@ -545,20 +551,20 @@ mod tests {
         assert_eq!((record.plan, record.key.as_str()), (Plan::Downloads, "GOOD-KEY-0001"));
 
         let again = validate(&http, &base, &c, &record, NOW + DAY).unwrap();
-        assert_eq!((again.instance_id.as_str(), again.validated_at), ("inst-1", NOW + DAY), "se conserva la activación");
+        assert_eq!((again.instance_id.as_str(), again.validated_at), ("inst-1", NOW + DAY), "the activation is kept");
 
-        let gone = LicenseRecord { instance_id: "otra".into(), ..record.clone() };
-        assert!(matches!(validate(&http, &base, &c, &gone, NOW).unwrap_err(), LicenseError::Rejected(m) if m.contains("activación")));
+        let gone = LicenseRecord { instance_id: "other".into(), ..record.clone() };
+        assert_eq!(validate(&http, &base, &c, &gone, NOW).unwrap_err().message(), msg!("music.license.instance"));
 
         assert!(activate(&http, &base, &c, "NOPE-NOPE-NOPE", "x", NOW).is_err());
-        assert!(matches!(activate(&http, &base, &c, "no válida", "x", NOW).unwrap_err(), LicenseError::Rejected(_)));
-        // Clave de otra tienda: se rechaza y se libera la activación.
+        assert!(matches!(activate(&http, &base, &c, "not valid", "x", NOW).unwrap_err(), LicenseError::Rejected(_)));
+        // A key from another store: rejected, and its activation released.
         assert!(activate(&http, &base, &c, "FOREIGN-KEY-01", "x", NOW).is_err());
         assert_eq!(deactivate(&http, &base, &record), Ok(()));
         let paths: Vec<String> = log.lock().unwrap().iter().map(|s| s.path.clone()).collect();
         assert_eq!(paths.iter().filter(|p| p.ends_with("/deactivate")).count(), 2, "{paths:?}");
 
-        // Sin conexión.
+        // Offline.
         let err = validate(&http, "http://127.0.0.1:9", &c, &record, NOW).unwrap_err();
         assert!(matches!(err, LicenseError::Offline(_)));
     }

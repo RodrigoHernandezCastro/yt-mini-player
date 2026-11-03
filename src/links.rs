@@ -1,18 +1,18 @@
-//! Convierte texto del portapapeles en una URL de YouTube segura de abrir.
+//! Turns clipboard text into a YouTube URL that is safe to open.
 //!
-//! Solo se aceptan dominios de YouTube; cualquier otra cosa se rechaza para
-//! que "abrir enlace copiado" no sirva para navegar a sitios arbitrarios.
+//! Only YouTube domains are accepted; anything else is rejected so "open
+//! copied link" cannot be used to navigate to arbitrary sites.
 
 use url::Url;
 
 const VIDEO_ID_LEN: usize = 11;
 
-/// Devuelve la URL a abrir, o `None` si el texto no es un enlace de YouTube.
+/// Returns the URL to open, or `None` if the text is not a YouTube link.
 ///
-/// Acepta:
-/// - `youtube.com`, `www.`, `m.` y `music.youtube.com` (http o https).
-/// - `youtu.be/<id>` (con `t=` y `list=` si los trae).
-/// - Un id de video suelto de 11 caracteres.
+/// Accepts:
+/// - `youtube.com`, `www.`, `m.` and `music.youtube.com` (http or https).
+/// - `youtu.be/<id>` (with `t=` and `list=` if present).
+/// - A bare 11-character video id.
 pub fn normalize(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty() || text.len() > 2048 {
@@ -23,7 +23,7 @@ pub fn normalize(text: &str) -> Option<String> {
         return Some(format!("https://www.youtube.com/watch?v={text}"));
     }
 
-    // Permite pegar "youtube.com/watch?v=..." sin esquema.
+    // Allows pasting "youtube.com/watch?v=..." without a scheme.
     let with_scheme;
     let candidate = if text.contains("://") {
         text
@@ -55,7 +55,7 @@ pub fn normalize(text: &str) -> Option<String> {
                 let mut query = watch.query_pairs_mut();
                 query.append_pair("v", id);
                 for (key, value) in url.query_pairs() {
-                    // `si` es un parámetro de seguimiento: se descarta.
+                    // `si` is a tracking parameter: dropped.
                     if matches!(key.as_ref(), "t" | "list" | "index") {
                         query.append_pair(&key, &value);
                     }
@@ -120,7 +120,7 @@ mod tests {
     fn rejects_other_sites_and_schemes() {
         for bad in [
             "",
-            "hola mundo",
+            "hello world",
             "https://evil.com/watch?v=dQw4w9WgXcQ",
             "https://youtube.com.evil.com/",
             "https://notyoutube.com/",
@@ -133,3 +133,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/links_cases.rs"]
+mod cases;

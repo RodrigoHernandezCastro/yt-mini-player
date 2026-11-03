@@ -1,5 +1,5 @@
-# Comprobaciones en cada push y pull request: pruebas, lint y auditoría de
-# dependencias. Las acciones de terceros van fijadas a una versión.
+# Checks on every push and pull request: tests, lint and dependency audit.
+# Third-party actions are pinned to a version.
 name: CI
 
 on:
@@ -19,11 +19,11 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Pruebas de Rust
+      - name: Rust tests
         run: cargo test --locked
-      - name: Clippy (avisos = error)
+      - name: Clippy (warnings = errors)
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Pruebas de JavaScript
+      - name: JavaScript tests
         run: |
           node tests/inject.test.js
           node tests/maintenance.test.js
@@ -31,22 +31,97 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Pruebas de extremo a extremo (Chromium)
+      - name: Text keys used by the code exist in every language
+        run: python tests/i18n_keys.py
+      - name: End-to-end tests (Chromium)
         run: |
-          pip install playwright==1.47.0
+          pip install playwright==1.47.0 pillow==10.4.0
           python -m playwright install chromium
           python tests/ui_e2e.py
           python tests/home_e2e.py
           python tests/mini_e2e.py
           python tests/security_e2e.py
           python tests/music_e2e.py
+          python tests/together_e2e.py
+          python tests/share_e2e.py
+      - name: Experience suite (journeys, accessibility, languages, contracts)
+        run: python tests/suite.py --report suite-report
+      - name: The live smoke test's own checks (stand-ins, healthy and changed)
+        shell: bash
+        run: |
+          python tests/live_smoke.py --offline
+          if python tests/live_smoke.py --offline --broken; then echo "a changed page went unnoticed"; exit 1; fi
+      - name: Suite report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-report
+          path: suite-report
+          if-no-files-found: ignore
+
+  # The real program on real Windows: the drivable test build (src/e2e.rs)
+  # with Playwright over CDP, two copies talking through a local relay, and
+  # proof that a release would refuse that build.
+  windows-e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e
+      - name: Test build
+        run: cargo build --release --locked --features e2e
+      - name: A release refuses it
+        shell: pwsh
+        run: |
+          $refused = $false
+          try { ./tools/check-release-exe.ps1 -Files target/release/yt-mini-player.exe } catch { $refused = $true; Write-Host $_ }
+          if (-not $refused) { throw 'check-release-exe.ps1 did not catch the test build' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Local relay (wrangler dev)
+        shell: pwsh
+        working-directory: server/together-relay
+        run: |
+          npm install --no-audit --no-fund
+          Start-Process -FilePath npx.cmd -ArgumentList 'wrangler', 'dev', '--port', '8799', '--ip', '127.0.0.1' -RedirectStandardOutput "$env:RUNNER_TEMP\wrangler.log" -RedirectStandardError "$env:RUNNER_TEMP\wrangler.err"
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline) {
+            try { Invoke-WebRequest -Uri http://127.0.0.1:8799/ -UseBasicParsing -TimeoutSec 2 | Out-Null; break } catch { if ($_.Exception.Response) { break } }
+            Start-Sleep -Seconds 1
+          }
+      - name: Start, Settings and Watch together on the real app
+        run: |
+          pip install playwright==1.47.0
+          python tests/windows_e2e.py --exe target/release/yt-mini-player.exe --relay ws://127.0.0.1:8799
+
+  # The watch together relay, on a local copy of Cloudflare's runtime.
+  relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server/together-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Relay tests (wrangler dev)
+        run: |
+          npm install --no-audit --no-fund
+          npm test
 
   supply-chain:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Vulnerabilidades conocidas (RustSec), licencias, orígenes y crates
-      # duplicados o prohibidos (deny.toml).
+      # Known vulnerabilities (RustSec), licenses, sources and duplicate or
+      # banned crates (deny.toml).
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources

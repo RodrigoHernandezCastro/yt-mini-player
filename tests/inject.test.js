@@ -14,7 +14,7 @@ function env() {
     createElement:()=>({}), addEventListener(){}, querySelector:()=>null };
   class Element {}
   const shared = {};
-  // __ytmpSend/__ytmpShared los pone el envoltorio de webview.rs.
+  // __ytmpSend/__ytmpShared come from webview.rs' wrapper.
   vm.runInNewContext(src, { window, document, Element, HTMLVideoElement: class {}, setTimeout, innerWidth: 640, innerHeight: 360, location: { hostname: 'www.youtube.com' }, PointerEvent: class {}, MouseEvent: class {}, __ytmpSend: m => sent.push(m), __ytmpShared: shared });
   const fire = (t, props) => {
     const e = { isTrusted:true, defaultPrevented:false, stopped:false, altKey:false, button:0, buttons:0,
@@ -25,29 +25,29 @@ function env() {
   return { fire, sent, attrs, shared };
 }
 
-// Un evento sintético de la página (isTrusted = false) no mueve la ventana.
+// A synthetic event from the page (isTrusted = false) does not move the window.
 {
   const u = env();
   const ev = u.fire('pointerdown', { altKey:true, isTrusted:false });
   assert.deepStrictEqual(u.sent, []); assert(!ev.defaultPrevented);
-  // El asa de ui.js usa startDrag sin exponerlo en window.
+  // ui.js' handle uses startDrag without it being exposed on window.
   assert.strictEqual(typeof u.shared.startDrag, 'function');
 }
 
-// Alt+clic en el centro → drag, y se consume el click posterior
+// Alt+click in the middle → drag, and the click that follows is swallowed
 let t = env();
 let e = t.fire('pointerdown', { altKey:true });
 assert.deepStrictEqual(t.sent, ['drag']); assert(e.defaultPrevented && e.stopped);
 assert(t.fire('mousedown', {altKey:true}).stopped);
 assert(t.fire('click', { altKey:true }).stopped);
-assert(!t.fire('click', {}).stopped, 'solo se consume un click');
+assert(!t.fire('click', {}).stopped, 'only one click is swallowed');
 
-// Clic normal en el centro → nada
+// A plain click in the middle → nothing
 t = env(); e = t.fire('pointerdown', {});
 assert.deepStrictEqual(t.sent, []); assert(!e.defaultPrevented);
 assert(!t.fire('click', {}).stopped);
 
-// Bordes y esquinas
+// Edges and corners
 const cases = [[320,2,'n'],[320,357,'s'],[2,180,'w'],[637,180,'e'],
   [2,2,'nw'],[10,2,'nw'],[2,10,'nw'],[637,2,'ne'],[2,357,'sw'],[637,357,'se'],[20,2,'n'],[320,6,null]];
 for (const [x,y,z] of cases) {
@@ -55,23 +55,23 @@ for (const [x,y,z] of cases) {
   assert.deepStrictEqual(t.sent, z ? ['resize:'+z] : [], `${x},${y}`);
 }
 
-// Alt tiene prioridad sobre el borde; botón derecho y táctil se ignoran
+// Alt wins over the edge; right button and touch are ignored
 t = env(); t.fire('pointerdown', { clientX:2, clientY:2, altKey:true }); assert.deepStrictEqual(t.sent, ['drag']);
 t = env(); t.fire('pointerdown', { button:2, altKey:true }); assert.deepStrictEqual(t.sent, []);
 t = env(); t.fire('pointerdown', { pointerType:'touch', altKey:true }); assert.deepStrictEqual(t.sent, []);
 
-// Cursor: atributo solo en bordes, se limpia al salir
+// Cursor: attribute only on edges, cleared on leaving
 t = env();
 t.fire('pointermove', { clientX:637, clientY:180 }); assert.strictEqual(t.attrs['data-ytmp-resize'], 'e');
 t.fire('pointermove', { clientX:320, clientY:180 }); assert(!('data-ytmp-resize' in t.attrs));
 t.fire('pointermove', { clientX:2, clientY:2 }); t.fire('mouseout', { relatedTarget:null });
 assert(!('data-ytmp-resize' in t.attrs));
 
-// dblclick con Alt no llega a YouTube (pantalla completa)
+// dblclick with Alt does not reach YouTube (full screen)
 t = env(); assert(t.fire('dblclick', { altKey:true }).stopped);
 
-// iframe: no se instala
+// iframe: not installed
 { const l={}; const w={addEventListener:(t,f)=>(l[t]||=[]).push(f)}; w.top={};
   vm.runInNewContext(src,{window:w,document:{},location:{hostname:'www.youtube.com'},__ytmpSend(){},__ytmpShared:{}}); assert.strictEqual(Object.keys(l).length,0); }
 
-console.log('inject.js: todas las pruebas pasan');
+console.log('inject.js: all tests pass');

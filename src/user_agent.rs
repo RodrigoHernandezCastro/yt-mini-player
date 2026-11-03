@@ -1,17 +1,17 @@
-//! User-Agent de Chrome alineado con la versión real de WebView2.
+//! Chrome User-Agent aligned with the real WebView2 version.
 //!
-//! Se usa el formato "reducido" de Chrome (`Chrome/<mayor>.0.0.0`), que es el
-//! que envía Chrome estable hoy. Al derivar la versión mayor del runtime
-//! instalado, la cadena nunca queda desfasada respecto al motor.
+//! It uses Chrome's "reduced" format (`Chrome/<major>.0.0.0`), which is what
+//! stable Chrome sends today. Since the major version comes from the
+//! installed runtime, the string never falls out of step with the engine.
 //!
-//! Limitación conocida: esto no cambia las Client Hints (`Sec-CH-UA`,
-//! `navigator.userAgentData`), que pueden seguir identificando WebView2.
+//! Known limitation: this does not change the Client Hints (`Sec-CH-UA`,
+//! `navigator.userAgentData`), which may still identify WebView2.
 
 fn major(runtime_version: &str) -> Option<u32> {
     runtime_version.trim().split('.').next()?.parse().ok()
 }
 
-/// Construye el User-Agent a partir de una versión tipo `"133.0.3065.92"`.
+/// Builds the User-Agent from a version like `"133.0.3065.92"`.
 pub fn chrome_user_agent(runtime_version: &str) -> Option<String> {
     let major = major(runtime_version)?;
     Some(format!(
@@ -20,15 +20,14 @@ pub fn chrome_user_agent(runtime_version: &str) -> Option<String> {
     ))
 }
 
-/// User-Agent de Edge (lo que WebView2 es de verdad), en formato reducido.
-/// Los servicios con DRM lo usan para elegir el sistema de protección que
-/// el motor ofrece.
+/// Edge's User-Agent (what WebView2 really is), in the reduced format. DRM
+/// services use it to pick the protection system the engine offers.
 pub fn edge_user_agent(runtime_version: &str) -> Option<String> {
     let major = major(runtime_version)?;
     Some(format!("{} Edg/{major}.0.0.0", chrome_user_agent(runtime_version)?))
 }
 
-/// Los dos User-Agent que usa la app, calculados una vez al arrancar.
+/// The two User-Agents the app uses, worked out once at startup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Agents {
     pub chrome: Option<String>,

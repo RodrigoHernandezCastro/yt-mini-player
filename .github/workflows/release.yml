@@ -1,7 +1,7 @@
-# Versión publicada: se compila en GitHub (no en el equipo de nadie), se
-# publican las huellas SHA-256 y una atestación de procedencia firmada
-# (Sigstore) que prueba qué commit y qué workflow produjeron cada archivo:
-#   gh attestation verify YT-Mini-Player-<versión>-win64.zip --repo <dueño>/<repo>
+# Published release: built on GitHub (not on anyone's PC), with the SHA-256
+# fingerprints and a signed provenance attestation (Sigstore) that proves
+# which commit and workflow produced each file:
+#   gh attestation verify YT-Mini-Player-<version>-win64.zip --repo <owner>/<repo>
 name: Release
 
 on:
@@ -9,8 +9,8 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write      # subir los archivos a la versión
-  id-token: write      # firmar la atestación (OIDC)
+  contents: write      # upload the files to the release
+  id-token: write      # sign the attestation (OIDC)
   attestations: write
 
 jobs:
@@ -19,17 +19,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Pruebas
+      - name: Tests
         run: cargo test --locked
-      - name: Auditoría de dependencias
+      - name: Dependency audit
         run: |
           cargo install cargo-audit --locked
           cargo audit --deny warnings
-      - name: Compilar y empaquetar (normal + superposición máxima)
+      # Authenticode with Azure Artifact Signing, when the repository has it
+      # set up (the variables below; docs/SIGNING.md). Without them the
+      # release is built unsigned, as before, and the log says so.
+      - name: Sign in to Azure (for signing)
+        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Signing client
+        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
         shell: pwsh
-        # Tienda de Lemon Squeezy (variables del repositorio, no secretos:
-        # ids de tienda y producto y enlaces de pago son públicos). Sin
-        # ellas, los planes de pago quedan bloqueados en la app.
+        env:
+          ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'signing'
+          nuget install Microsoft.ArtifactSigning.Client -OutputDirectory $dir -ExcludeVersion -NonInteractive
+          if ($LASTEXITCODE -ne 0) { throw 'The signing client could not be downloaded.' }
+          $dlib = Get-ChildItem $dir -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll (x64) is not in the signing client.' }
+          $metadata = Join-Path $dir 'metadata.json'
+          [ordered]@{
+            Endpoint = $env:ENDPOINT
+            CodeSigningAccountName = $env:ACCOUNT
+            CertificateProfileName = $env:PROFILE
+            CorrelationId = "$env:GITHUB_REPOSITORY@$env:GITHUB_SHA"
+          } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
+          "YTMP_SIGN_ARTIFACT_DLIB=$($dlib.FullName)" >> $env:GITHUB_ENV
+          "YTMP_SIGN_ARTIFACT_METADATA=$metadata" >> $env:GITHUB_ENV
+          # Set up means required: a signing failure stops the release.
+          "YTMP_SIGN_REQUIRED=1" >> $env:GITHUB_ENV
+      - name: Build and package (normal + maximum overlay)
+        shell: pwsh
+        # Lemon Squeezy store and the watch together relay (repository
+        # variables, not secrets: ids, checkout links and the relay address
+        # are public). Without them, the paid plans are locked in the app.
         env:
           YTMP_LS_STORE_ID: ${{ vars.YTMP_LS_STORE_ID }}
           YTMP_LS_DOWNLOADS_PRODUCTS: ${{ vars.YTMP_LS_DOWNLOADS_PRODUCTS }}
@@ -37,14 +72,30 @@ jobs:
           YTMP_LS_DOWNLOADS_CHECKOUT: ${{ vars.YTMP_LS_DOWNLOADS_CHECKOUT }}
           YTMP_LS_LIFETIME_CHECKOUT: ${{ vars.YTMP_LS_LIFETIME_CHECKOUT }}
           YTMP_LS_PORTAL: ${{ vars.YTMP_LS_PORTAL }}
+          # Watch together relay (server/together-relay), e.g.
+          # wss://ytmp-together.<subdomain>.workers.dev. Without it, the app
+          # asks for the address the first time.
+          YTMP_TOGETHER_RELAY: ${{ vars.YTMP_TOGETHER_RELAY }}
         run: ./tools/package.ps1
-      - name: Atestación de procedencia
+      - name: Not the test build
+        shell: pwsh
+        run: ./tools/check-release-exe.ps1 -Files (Get-ChildItem dist/YT-Mini-Player-*-win64/*.exe).FullName
+      - name: Signature status
+        shell: pwsh
+        run: |
+          "| File | Signature | Signer |`n|---|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem dist/YT-Mini-Player-*-win64/*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature -FilePath $_.FullName
+            $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '-' }
+            "| $($_.Name) | $($sig.Status) | $signer |" >> $env:GITHUB_STEP_SUMMARY
+          }
+      - name: Provenance attestation
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: |
             dist/YT-Mini-Player-*-win64.zip
             dist/YT-Mini-Player-*-win64/*.exe
-      - name: Publicar
+      - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

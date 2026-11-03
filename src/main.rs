@@ -1,8 +1,16 @@
-// En release no se abre consola; en debug se conserva para ver los logs.
+// Release builds open no console; debug builds keep it for the logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// First: the other modules use its `t!` and `msg!` macros.
+#[macro_use]
+mod i18n;
+
 mod app;
+mod cast;
 mod config;
+mod devtools;
+mod diag;
+mod e2e;
 mod dock;
 mod extensions;
 mod home;
@@ -14,15 +22,21 @@ mod links;
 mod lock;
 mod license;
 mod lockview;
+mod loopback;
 mod media;
 mod mini;
 mod music;
 mod net;
+mod pacer;
 mod platform;
 mod policy;
+mod remote;
 mod security;
 mod services;
+mod settings_panel;
 mod taskbar;
+mod together;
+mod together_panel;
 mod topmost;
 mod tray;
 mod user_agent;
@@ -49,23 +63,32 @@ use crate::{
 };
 
 fn main() {
+    // Until the settings are read, the Windows display language (startup
+    // errors and the WebView2 prompt use it).
+    i18n::set(i18n::detect());
     if let Err(err) = run() {
-        platform::show_error(&format!("No se pudo iniciar el reproductor.\n\n{err}"));
+        platform::show_error(&t!("startup.failed", error = err));
         std::process::exit(1);
     }
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    // `--hidden`: arrancar oculto en la bandeja (lo usa el inicio con Windows).
+    // `--hidden`: start hidden in the tray (used when starting with Windows).
     let start_hidden = std::env::args().skip(1).any(|a| a == "--hidden");
+    // `--wait-pid=N`: restarted by the app itself (a setting that needs a
+    // fresh start): the previous copy finishes quitting first.
+    if let Some(pid) = std::env::args().skip(1).find_map(|a| a.strip_prefix("--wait-pid=").and_then(|p| p.parse::<u32>().ok())) {
+        platform::wait_for_exit(pid, std::time::Duration::from_secs(15));
+    }
 
-    // Si ya está abierto, se le pide que se muestre y esta copia termina.
-    let activation = match platform::claim_instance() {
+    // If it is already running, ask it to show itself and quit this copy.
+    // (The test build with its own data folder is an instance of its own.)
+    let activation = match platform::claim_instance(e2e::instance_name().as_deref()) {
         Instance::Primary(listener) => listener,
         Instance::Secondary => return Ok(()),
     };
 
-    // `webview_version()` es más fiable que leer claves de registro a mano.
+    // `webview_version()` is more reliable than reading registry keys by hand.
     let runtime_version = match wry::webview_version() {
         Ok(version) => version,
         Err(_) => {
@@ -74,45 +97,60 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let paths = Paths::resolve()?;
-    // La 0.6.0 cifraba la carpeta con EFS (y Windows mostraba un aviso que
-    // asustaba): se descifra antes de que WebView2 abra el perfil.
+    let paths = match e2e::data_dir() {
+        Some(dir) => Paths::under(dir)?,
+        None => Paths::resolve()?,
+    };
+    // A diary of notable steps, to know where it stopped if it crashes.
+    diag::start(&paths.root, &runtime_version);
+    #[cfg(feature = "e2e")]
+    diag::note(format!("{}: DevTools port {:?}", e2e::MARKER, e2e::port()));
+    // 0.6.0 encrypted the folder with EFS (and Windows showed a scary
+    // prompt): it is decrypted before WebView2 opens the profile.
     let legacy_efs = security::remove_legacy_efs(&paths.root, &paths.profile);
-    // Bóveda: AES-256-GCM; la clave, atada al TPM del equipo (si hay) y a la
-    // cuenta de Windows (DPAPI).
+    // Vault: AES-256-GCM; its key is bound to the PC's TPM (if any) and to
+    // the Windows account (DPAPI).
     let hardware = vault::hardware_protector();
     let (vault, vault_state) =
         vault::Vault::open_with(&paths.vault_key, vault::system_protector().as_ref(), hardware.as_deref())?;
     let store = Store::new(vault);
-    // Pasar la clave al TPM es lento la primera vez (genera una clave RSA
-    // dentro del chip): en segundo plano, sin retrasar el arranque.
+    // Moving the key to the TPM is slow the first time (it creates an RSA
+    // key inside the chip): in the background, without delaying startup.
     if hardware.is_some() && vault::key_protection(&paths.vault_key) != Some(vault::KeyProtection::DeviceAndAccount) {
         let vault = store.vault();
         let key_path = paths.vault_key.clone();
         let _ = std::thread::Builder::new().name("tpm".into()).spawn(move || {
             if let Some(hardware) = vault::hardware_protector() {
                 if let Err(err) = vault.upgrade(&key_path, vault::system_protector().as_ref(), hardware.as_ref()) {
-                    eprintln!("la clave sigue protegida solo por la cuenta: {err}");
+                    eprintln!("the key is still protected by the account only: {err}");
                 }
             }
         });
     }
     let settings = Settings::load(&store, &paths.settings);
+    // The language the user picked, or else the Windows one.
+    i18n::set(settings.language());
+    // Before the first webview: they all share these arguments.
+    webview::configure(settings.hardware_acceleration);
+    diag::note(format!("hardware acceleration {}", if settings.hardware_acceleration { "on" } else { "off" }));
     let saved_geometry = WindowGeometry::load(&store, &paths.window_state);
-    // Claves de sesión del IPC (nuevas en cada arranque).
+    // IPC session keys (new on every start).
     let keys = webview::Keys::new()?;
     let overlay = platform::has_uiaccess();
     let extension_ids = config::load_extension_ids(&store, &paths.extension_ids);
     let allowed_extensions = Arc::new(Mutex::new(extension_ids.values().cloned().collect::<Vec<_>>()));
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    // Después de crear el bucle: tao fija ahí su propio modo de tema.
+    // After creating the loop: tao sets its own theme mode there.
     platform::use_dark_menus();
     let proxy = event_loop.create_proxy();
     let window = window::build(&event_loop, saved_geometry)?;
     let mini_window = mini::build_window(&event_loop)?;
+    let together_window = together_panel::build_window(&event_loop)?;
+    let settings_window = settings_panel::build_window(&event_loop)?;
+    let cast_window = cast::build_window(&event_loop)?;
 
-    // Arranca en el menú, o directo en el último servicio si así se pidió.
+    // Start on the menu, or straight in the last service if so chosen.
     let agents = user_agent::Agents::new(&runtime_version);
     let start = services::startup_service(settings.start_with_last, settings.last_service.as_deref());
     let (start_url, start_agent) = match start {
@@ -122,9 +160,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let home_state: home::SharedHomeState = Arc::new(Mutex::new(home::HomeState {
         last_service: settings.last_service.clone(),
         start_with_last: settings.start_with_last,
+        welcome: !settings.welcome_seen,
     }));
 
-    // Mi música: un hilo propio con la biblioteca, las descargas y la licencia.
+    // My music: its own thread with the library, the downloads and the license.
     let music_proxy = proxy.clone();
     let music = music::start(
         music::Config {
@@ -156,6 +195,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         },
     )?;
 
+    webview::watch_processes(&webview, "main");
+
     let show_proxy = proxy.clone();
     activation.listen(move || {
         let _ = show_proxy.send_event(UserEvent::Command(Command::Show));
@@ -180,13 +221,17 @@ fn run() -> Result<(), Box<dyn Error>> {
         extension_ids,
         allowed_extensions,
         music: Some(music),
+        together_window,
+        settings_window,
+        cast_window,
+        webview_version: runtime_version.clone(),
     });
 
-    // `ControlFlow::Wait` deja el hilo dormido hasta que llega un mensaje:
-    // cero CPU del host en reposo.
+    // `ControlFlow::Wait` keeps the thread asleep until a message arrives:
+    // zero host CPU while idle.
     event_loop.run(move |event, _target, control_flow| {
         let keep_running = match event {
-            // Llegó la hora de un temporizador (revisar la barra de música).
+            // A timer is due (check the music bar).
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
                 app.on_timer();
                 true
@@ -197,7 +242,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     app.on_resized();
                     true
                 }
-                // Alt+F4 o cerrar desde la barra de tareas.
+                // Alt+F4 or closing from the taskbar.
                 WindowEvent::CloseRequested => app.handle(Command::Quit),
                 _ => true,
             },
@@ -206,10 +251,23 @@ fn run() -> Result<(), Box<dyn Error>> {
             {
                 app.handle(Command::MiniHide)
             }
+            // Closing "Watch together" only hides it: the session goes on.
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. }
+                if window_id == app.together_window_id() =>
+            {
+                app.handle(Command::TogetherClose)
+            }
+            // Closing Settings only hides it.
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. }
+                if window_id == app.settings_window_id() =>
+            {
+                app.handle(Command::SettingsClose)
+            }
             _ => true,
         };
-        // `Wait` deja el hilo dormido hasta que llega un mensaje (cero CPU
-        // en reposo); con la barra de música a la vista, hasta su próxima revisión.
+        // `Wait` sleeps until a message arrives (zero CPU while idle); with
+        // the music bar showing or a watch together session on, until the
+        // next check.
         *control_flow = if !keep_running {
             ControlFlow::Exit
         } else if let Some(deadline) = app.deadline() {

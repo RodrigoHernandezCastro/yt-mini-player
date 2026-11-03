@@ -1,0 +1,52 @@
+# Once a week, against the real services: does YouTube's watch page still
+# have what the app's page scripts rely on, does Google's sign-in still
+# take this browser, and does every service in the catalog still answer?
+# (tests/live_smoke.py). When something changed it opens an issue, so a
+# fix can ship before users run into it.
+name: Live smoke test
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays, 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Chromium
+        run: |
+          pip install playwright==1.47.0
+          python -m playwright install --with-deps chromium
+      - name: The script itself (stand-ins, healthy and changed)
+        run: |
+          python tests/live_smoke.py --offline
+          if python tests/live_smoke.py --offline --broken; then echo "a change went unnoticed"; exit 1; fi
+      - name: Against the real services
+        run: python tests/live_smoke.py --report live-smoke.md
+      - name: Report
+        if: always()
+        run: if [ -f live-smoke.md ]; then cat live-smoke.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Open an issue (one at a time)
+        if: failure() && hashFiles('live-smoke.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="A service changed its page (live smoke test)"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          body="$(cat live-smoke.md)
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

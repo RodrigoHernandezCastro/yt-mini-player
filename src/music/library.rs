@@ -1,15 +1,16 @@
-//! Biblioteca de música: canciones, playlists y detección de duplicados.
+//! Music library: songs, playlists and finding duplicates.
 //!
-//! Todo lo de aquí es puro (sin disco ni red) para poder probarlo a fondo.
+//! Everything here is pure (no disk or network) so it can be tested
+//! thoroughly.
 //!
-//! Una canción se considera **la misma** que otra si:
-//! 1. **Mismo archivo**: el contenido es idéntico (huella rápida del
-//!    contenido, ver `scan::content_hash`).
-//! 2. **Misma canción**: artista y título coinciden una vez normalizados
-//!    (mayúsculas, tildes, "feat.", "(Remastered)"...) y la duración difiere
-//!    en menos de 3 s.
-//! 3. **Mismo audio**: la huella acústica (Chromaprint) coincide, aunque las
-//!    etiquetas o el formato sean distintos (un MP3 y un FLAC del mismo tema).
+//! A song counts as **the same** as another if:
+//! 1. **Same file**: the content is identical (quick content hash, see
+//!    `scan::content_hash`).
+//! 2. **Same song**: artist and title match once normalized (case, accents,
+//!    Polish letters, "ё", full-width Latin letters, "feat.",
+//!    "(Remastered)"...) and the durations differ by less than 3 s.
+//! 3. **Same audio**: the acoustic fingerprint (Chromaprint) matches, even if
+//!    the tags or the format differ (an MP3 and a FLAC of the same track).
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -18,25 +19,25 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Diferencia máxima de duración para "misma canción" por etiquetas.
+/// Largest duration difference for "same song" by tags.
 pub const SAME_SONG_SECONDS: f64 = 3.0;
-/// Para comparar huellas solo se miran canciones de duración parecida.
+/// Fingerprints are only compared between songs of similar duration.
 pub const SAME_AUDIO_SECONDS: f64 = 10.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Source {
-    /// Un archivo del usuario.
+    /// A file of the user's.
     #[default]
     Local,
-    /// Descargada del Internet Archive (con su licencia y autoría).
+    /// Downloaded from the Internet Archive (with its license and authors).
     Archive { item: String, file: String, license: String, creator: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Track {
-    /// Estable para una ruta (hash de la ruta).
+    /// Stable for a path (hash of the path).
     pub id: String,
     pub path: PathBuf,
     pub title: String,
@@ -44,21 +45,21 @@ pub struct Track {
     pub album: String,
     pub track_no: Option<u32>,
     pub year: Option<u32>,
-    /// Segundos (0 si se desconoce).
+    /// Seconds (0 if unknown).
     pub duration: f64,
     pub size: u64,
-    /// Fecha de modificación del archivo (segundos Unix).
+    /// The file's modification date (Unix seconds).
     pub modified: u64,
-    /// Extensión en minúsculas (`mp3`, `flac`...).
+    /// Lowercase extension (`mp3`, `flac`...).
     pub format: String,
     /// kbps.
     pub bitrate: Option<u32>,
-    /// Huella del contenido (`scan::content_hash`).
+    /// Content hash (`scan::content_hash`).
     pub hash: String,
-    /// Portada en la caché (nombre del archivo).
+    /// Cover in the cache (file name).
     pub cover: Option<String>,
     pub source: Source,
-    /// Cuándo entró en la biblioteca (segundos Unix).
+    /// When it entered the library (Unix seconds).
     pub added: u64,
 }
 
@@ -67,8 +68,7 @@ impl Track {
         matches!(self.format.as_str(), "flac" | "wav")
     }
 
-    /// Para elegir cuál conservar entre duplicados: sin pérdida > más kbps >
-    /// más grande.
+    /// To pick which duplicate to keep: lossless > more kbps > bigger.
     pub fn quality(&self) -> u64 {
         let kbps = self.bitrate.map(u64::from).unwrap_or_else(|| {
             if self.duration > 0.0 {
@@ -93,12 +93,12 @@ pub struct Playlist {
     pub tracks: Vec<String>,
     pub created: u64,
     pub updated: u64,
-    /// Si se creó al descargar un álbum: su identificador en el Archive.
+    /// If it was created by downloading an album: the album's Archive id.
     pub origin: Option<String>,
 }
 
-/// Un archivo del Archive que resultó ser una canción que ya estaba (se
-/// descargó, se comparó y se descartó): no se vuelve a descargar.
+/// An Archive file that turned out to be a song already there (it was
+/// downloaded, compared and discarded): it is not downloaded again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Alias {
@@ -111,10 +111,10 @@ pub struct Alias {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Quality {
-    /// MP3 cuando existe: ocupa mucho menos.
+    /// MP3 when there is one: it takes much less space.
     #[default]
     Compact,
-    /// El original sin pérdida (FLAC) si existe.
+    /// The lossless original (FLAC) if there is one.
     Best,
 }
 
@@ -122,27 +122,29 @@ pub enum Quality {
 #[serde(default, rename_all = "camelCase")]
 pub struct Library {
     pub version: u32,
-    /// Carpetas importadas (se vuelven a revisar al abrir).
+    /// Imported folders (checked again when opening).
     pub folders: Vec<PathBuf>,
     pub tracks: Vec<Track>,
     pub playlists: Vec<Playlist>,
     pub quality: Quality,
-    /// Grupos de duplicados que el usuario decidió conservar (ids ordenados).
+    /// Duplicate groups the user decided to keep (sorted ids).
     pub ignored_duplicates: Vec<Vec<String>>,
     pub aliases: Vec<Alias>,
 }
 
-/// Normaliza un texto para comparar: minúsculas, sin tildes ni signos, sin
-/// "(Remastered 2011)", "[Official Audio]", "feat. X" ni números de pista.
+/// Normalizes a text for comparing: lowercase, no accents or punctuation,
+/// no "(Remastered 2011)", "[Official Audio]", "feat. X" or track numbers.
 pub fn normalize(text: &str) -> String {
-    let mut s: String = text.to_lowercase();
-    // Lo que va entre paréntesis o corchetes son versiones o adornos.
+    // Full-width Latin letters and digits (common in Japanese tags) first,
+    // so "ＡＢＣ" and "ABC" compare equal.
+    let mut s: String = text.chars().map(half_width).collect::<String>().to_lowercase();
+    // What goes in brackets is versions or decoration ("（Live）" too).
     let mut out = String::with_capacity(s.len());
     let mut depth = 0i32;
     for c in s.chars() {
         match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            '(' | '[' | '{' | '【' | '「' => depth += 1,
+            ')' | ']' | '}' | '】' | '」' => depth = (depth - 1).max(0),
             _ if depth == 0 => out.push(c),
             _ => {}
         }
@@ -155,29 +157,43 @@ pub fn normalize(text: &str) -> String {
     }
     let folded: String = s.chars().map(fold).collect();
     let words: Vec<&str> = folded.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    // "01 - Título" / "1-02 Título": fuera los números de pista del principio.
+    // "01 - Title" / "1-02 Title": leading track numbers go.
     let skip = words.iter().take_while(|w| w.len() <= 3 && w.chars().all(|c| c.is_ascii_digit())).count();
     let words = if skip < words.len() { &words[skip..] } else { &words[..] };
     let words: Vec<&str> = words.iter().copied().filter(|w| !matches!(*w, "the" | "and" | "y")).collect();
     words.join(" ")
 }
 
-fn fold(c: char) -> char {
+/// Full-width ASCII (U+FF01–FF5E) and the ideographic space to plain ASCII.
+fn half_width(c: char) -> char {
     match c {
-        'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
-        'é' | 'è' | 'ë' | 'ê' => 'e',
-        'í' | 'ì' | 'ï' | 'î' => 'i',
-        'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'ø' => 'o',
-        'ú' | 'ù' | 'ü' | 'û' => 'u',
-        'ñ' => 'n',
-        'ç' => 'c',
-        '&' | '+' => ' ',
+        '\u{3000}' => ' ',
+        '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
         c => c,
     }
 }
 
-/// Clave de "misma canción": artista + título normalizados. Sin título no
-/// hay clave (no se compara por etiquetas).
+fn fold(c: char) -> char {
+    match c {
+        'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' | 'ą' => 'a',
+        'é' | 'è' | 'ë' | 'ê' | 'ę' => 'e',
+        'í' | 'ì' | 'ï' | 'î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'ø' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' => 'u',
+        'ñ' | 'ń' => 'n',
+        'ç' | 'ć' => 'c',
+        'ł' => 'l',
+        'ś' => 's',
+        'ź' | 'ż' => 'z',
+        // Russian often writes "ё" as "е".
+        'ё' => 'е',
+        '&' | '+' | '・' => ' ',
+        c => c,
+    }
+}
+
+/// "Same song" key: normalized artist + title. Without a title there is no
+/// key (no comparing by tags).
 pub fn meta_key(artist: &str, title: &str) -> Option<String> {
     let title = normalize(title);
     if title.is_empty() {
@@ -190,7 +206,7 @@ fn close(a: f64, b: f64, tolerance: f64) -> bool {
     a > 0.0 && b > 0.0 && (a - b).abs() <= tolerance
 }
 
-/// Una canción que se quiere añadir (antes de descargarla).
+/// A song about to be added (before downloading it).
 #[derive(Debug, Clone, Default)]
 pub struct Candidate<'a> {
     pub hash: Option<&'a str>,
@@ -200,29 +216,30 @@ pub struct Candidate<'a> {
     pub duration: f64,
 }
 
-/// Por qué no hace falta descargarla. (Los nombres dicen qué es "lo mismo";
-/// van tal cual a la página.)
+/// Why it need not be downloaded. (The names say what is "the same"; they
+/// go to the page as they are.)
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Existing {
-    /// Ya se descargó ese mismo archivo.
+    /// That very file was already downloaded.
     SameDownload,
-    /// Hay un archivo idéntico.
+    /// There is an identical file.
     SameFile,
-    /// Misma canción por etiquetas y duración.
+    /// Same song by tags and duration.
     SameSong,
-    /// Mismo audio por huella acústica (tras descargar).
+    /// Same audio by acoustic fingerprint (after downloading).
     SameAudio,
 }
 
 impl Existing {
-    pub fn describe(self) -> &'static str {
+    /// Why, for the page.
+    pub fn message(self) -> crate::i18n::Message {
         match self {
-            Existing::SameDownload => "ya la descargaste",
-            Existing::SameFile => "ya tienes ese mismo archivo",
-            Existing::SameSong => "ya la tienes (misma canción)",
-            Existing::SameAudio => "ya la tienes (mismo audio)",
+            Existing::SameDownload => msg!("music.existing.same_download"),
+            Existing::SameFile => msg!("music.existing.same_file"),
+            Existing::SameSong => msg!("music.existing.same_song"),
+            Existing::SameAudio => msg!("music.existing.same_audio"),
         }
     }
 }
@@ -232,7 +249,7 @@ impl Library {
         self.tracks.iter().find(|t| t.id == id)
     }
 
-    /// Añade o reemplaza (misma id = misma ruta). Conserva cuándo se añadió.
+    /// Adds or replaces (same id = same path). Keeps when it was added.
     pub fn upsert(&mut self, mut track: Track) {
         match self.tracks.iter_mut().find(|t| t.id == track.id) {
             Some(existing) => {
@@ -246,7 +263,7 @@ impl Library {
         }
     }
 
-    /// Quita canciones (también de las playlists). Devuelve las quitadas.
+    /// Removes songs (from the playlists too). Returns the removed ones.
     pub fn remove(&mut self, ids: &[String]) -> Vec<Track> {
         let (gone, keep): (Vec<Track>, Vec<Track>) = std::mem::take(&mut self.tracks).into_iter().partition(|t| ids.contains(&t.id));
         self.tracks = keep;
@@ -257,7 +274,7 @@ impl Library {
         gone
     }
 
-    /// ¿Ya está? Para no descargar lo que ya se tiene.
+    /// Is it already there? So what the user has is not downloaded.
     pub fn find_existing(&self, c: &Candidate) -> Option<(Existing, &Track)> {
         if let Some((item, file)) = c.archive {
             let found = self.tracks.iter().find(|t| {
@@ -290,15 +307,15 @@ impl Library {
     }
 }
 
-/// Un grupo de canciones repetidas.
+/// A group of repeated songs.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateGroup {
-    /// El motivo más fuerte del grupo.
+    /// The group's strongest reason.
     pub reason: Existing,
-    /// De mejor a peor calidad; la primera es la que se sugiere conservar.
+    /// From best to worst quality; the first is the one suggested to keep.
     pub tracks: Vec<String>,
-    /// Bytes que se liberan quitando todas menos la primera.
+    /// Bytes freed by removing all but the first.
     pub wasted: u64,
 }
 
@@ -339,8 +356,8 @@ fn rank(reason: Existing) -> u8 {
     }
 }
 
-/// Busca canciones repetidas. `same_audio(a, b)` compara huellas (puede ser
-/// lento: solo se llama con duraciones parecidas).
+/// Finds repeated songs. `same_audio(a, b)` compares fingerprints (it can
+/// be slow: only called for similar durations).
 pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Track) -> bool) -> Vec<DuplicateGroup> {
     let tracks = &library.tracks;
     let n = tracks.len();
@@ -355,7 +372,7 @@ pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Tr
         }
     };
 
-    // 1. Mismo contenido.
+    // 1. Same content.
     let mut by_hash: BTreeMap<&str, usize> = BTreeMap::new();
     for (i, t) in tracks.iter().enumerate() {
         if t.hash.is_empty() {
@@ -368,7 +385,7 @@ pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Tr
             }
         }
     }
-    // 2. Mismas etiquetas y duración parecida.
+    // 2. Same tags and similar duration.
     let mut by_meta: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, t) in tracks.iter().enumerate() {
         if let Some(key) = t.meta_key() {
@@ -384,8 +401,8 @@ pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Tr
             }
         }
     }
-    // 3. Huella acústica, solo entre duraciones parecidas (ventana deslizante
-    //    sobre la lista ordenada por duración).
+    // 3. Acoustic fingerprint, only between similar durations (a sliding
+    //    window over the list sorted by duration).
     let mut order: Vec<usize> = (0..n).filter(|&i| tracks[i].duration > 0.0).collect();
     order.sort_by(|&a, &b| tracks[a].duration.total_cmp(&tracks[b].duration));
     for (x, &a) in order.iter().enumerate() {
@@ -432,8 +449,8 @@ pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Tr
     out
 }
 
-/// Nombre de archivo seguro en Windows (sin caracteres prohibidos, nombres
-/// reservados ni puntos o espacios al final) y de longitud razonable.
+/// A file name that is safe on Windows (no forbidden characters, reserved
+/// names or trailing dots or spaces) and of reasonable length.
 pub fn safe_file_name(text: &str, fallback: &str) -> String {
     let cleaned: String = text
         .chars()
@@ -459,7 +476,7 @@ mod tests {
     fn track(id: &str, artist: &str, title: &str, duration: f64) -> Track {
         Track {
             id: id.into(),
-            path: PathBuf::from(format!("C:/Música/{id}.mp3")),
+            path: PathBuf::from(format!("C:/Music/{id}.mp3")),
             artist: artist.into(),
             title: title.into(),
             duration,
@@ -475,14 +492,19 @@ mod tests {
     fn normalizes_titles_and_artists() {
         assert_eq!(normalize("Bohemian Rhapsody (Remastered 2011)"), "bohemian rhapsody");
         assert_eq!(normalize("01 - Canción Número Uno [Official Audio]"), "cancion numero uno");
-        assert_eq!(normalize("Señor feat. Alguien"), "senor");
+        assert_eq!(normalize("Señor feat. Someone"), "senor");
         assert_eq!(normalize("The Beatles"), "beatles");
         assert_eq!(normalize("Simon & Garfunkel"), normalize("Simon and Garfunkel"));
         assert_eq!(normalize("1-02 Para"), "para");
-        assert_eq!(normalize("1999"), "1999", "un título que es un número no se borra");
+        assert_eq!(normalize("1999"), "1999", "a title that is a number is not erased");
         assert_eq!(normalize("  "), "");
+        // Polish, Russian and Japanese tags.
+        assert_eq!(normalize("Żółć Łąka"), normalize("zolc laka"));
+        assert_eq!(normalize("Ёлка"), normalize("елка"));
+        assert_eq!(normalize("ＹＯＡＳＯＢＩ　夜に駆ける（Ｌｉｖｅ）"), normalize("YOASOBI 夜に駆ける"));
+        assert_eq!(normalize("夜に駆ける【MV】"), "夜に駆ける");
         assert_eq!(meta_key("Ronan Dec.", "Para"), meta_key("RONAN DEC", "para"));
-        assert_ne!(meta_key("Ronan Dec.", "Para"), meta_key("Otro", "Para"));
+        assert_ne!(meta_key("Ronan Dec.", "Para"), meta_key("Other", "Para"));
         assert_eq!(meta_key("x", ""), None);
     }
 
@@ -492,7 +514,7 @@ mod tests {
         let mut a = track("a", "Ronan Dec.", "Supernova", 263.7);
         a.source = Source::Archive { item: "TAM033".into(), file: "1-Supernova.mp3".into(), license: "by-sa".into(), creator: "Ronan Dec.".into() };
         lib.upsert(a);
-        lib.upsert(track("b", "Otro", "Tema", 200.0));
+        lib.upsert(track("b", "Other", "Song", 200.0));
 
         let same_download = Candidate { archive: Some(("TAM033", "1-Supernova.mp3")), ..Default::default() };
         assert_eq!(lib.find_existing(&same_download).map(|(e, t)| (e, t.id.as_str())), Some((Existing::SameDownload, "a")));
@@ -501,9 +523,9 @@ mod tests {
         let same_song = Candidate { artist: "ronan dec", title: "Supernova (Original Mix)", duration: 265.0, ..Default::default() };
         assert_eq!(lib.find_existing(&same_song).map(|(e, _)| e), Some(Existing::SameSong));
         let longer = Candidate { artist: "ronan dec", title: "Supernova", duration: 300.0, ..Default::default() };
-        assert_eq!(lib.find_existing(&longer), None, "otra versión (dura distinto)");
+        assert_eq!(lib.find_existing(&longer), None, "another version (different length)");
         let unknown_length = Candidate { artist: "ronan dec", title: "Supernova", duration: 0.0, ..Default::default() };
-        assert_eq!(lib.find_existing(&unknown_length), None, "sin duración no se arriesga");
+        assert_eq!(lib.find_existing(&unknown_length), None, "without a duration it takes no chances");
     }
 
     #[test]
@@ -513,12 +535,12 @@ mod tests {
         a.added = 100;
         a.source = Source::Archive { item: "i".into(), file: "f".into(), license: String::new(), creator: String::new() };
         lib.upsert(a);
-        let mut again = track("a", "x", "nuevo título", 10.0);
+        let mut again = track("a", "x", "new title", 10.0);
         again.added = 999;
         lib.upsert(again);
         assert_eq!(lib.tracks.len(), 1);
-        assert_eq!((lib.tracks[0].added, lib.tracks[0].title.as_str()), (100, "nuevo título"));
-        assert!(matches!(lib.tracks[0].source, Source::Archive { .. }), "volver a leer el archivo no olvida de dónde vino");
+        assert_eq!((lib.tracks[0].added, lib.tracks[0].title.as_str()), (100, "new title"));
+        assert!(matches!(lib.tracks[0].source, Source::Archive { .. }), "reading the file again does not forget where it came from");
     }
 
     #[test]
@@ -536,21 +558,21 @@ mod tests {
     #[test]
     fn groups_duplicates_and_suggests_the_best_copy() {
         let mut lib = Library::default();
-        // Mismo archivo en dos carpetas.
-        let a1 = track("a1", "Artista", "Uno", 200.0);
-        let mut a2 = track("a2", "Artista", "Uno copia", 200.0);
+        // The same file in two folders.
+        let a1 = track("a1", "Artist", "One", 200.0);
+        let mut a2 = track("a2", "Artist", "One copy", 200.0);
         a2.hash = a1.hash.clone();
-        // Misma canción por etiquetas; la FLAC es mejor.
-        let b1 = track("b1", "Grupo", "Dos (Remastered)", 180.0);
-        let mut b2 = track("b2", "GRUPO", "Dos", 181.5);
+        // Same song by tags; the FLAC is better.
+        let b1 = track("b1", "Band", "Two (Remastered)", 180.0);
+        let mut b2 = track("b2", "BAND", "Two", 181.5);
         b2.format = "flac".into();
         b2.bitrate = Some(900);
         b2.size = 30_000_000;
-        // Mismo audio con etiquetas distintas.
-        let c1 = track("c1", "", "Pista 3", 240.0);
-        let c2 = track("c2", "Alguien", "Tres", 243.0);
-        // Distintas: misma etiqueta pero dura otra cosa.
-        let d1 = track("d1", "Grupo", "Dos", 300.0);
+        // Same audio with different tags.
+        let c1 = track("c1", "", "Track 3", 240.0);
+        let c2 = track("c2", "Someone", "Three", 243.0);
+        // Different: same tags but another length.
+        let d1 = track("d1", "Band", "Two", 300.0);
         for t in [a1, a2, b1, b2, c1, c2, d1] {
             lib.upsert(t);
         }
@@ -563,14 +585,14 @@ mod tests {
         let find = |id: &str| groups.iter().find(|g| g.tracks.contains(&id.to_owned())).unwrap();
         assert_eq!(find("a1").reason, Existing::SameFile);
         assert_eq!(find("b1").reason, Existing::SameSong);
-        assert_eq!(find("b1").tracks[0], "b2", "se sugiere conservar la FLAC");
+        assert_eq!(find("b1").tracks[0], "b2", "keeping the FLAC is suggested");
         assert_eq!(find("b1").wasted, 5_000_000);
         assert_eq!(find("c1").reason, Existing::SameAudio);
         assert!(groups.iter().all(|g| !g.tracks.contains(&"d1".to_owned())));
-        // Nunca se comparan huellas de duraciones muy distintas.
+        // Fingerprints of very different durations are never compared.
         assert!(compared.iter().all(|(a, b)| (lib.track(a).unwrap().duration - lib.track(b).unwrap().duration).abs() <= SAME_AUDIO_SECONDS));
 
-        // Un grupo marcado como "no son duplicados" ya no sale.
+        // A group marked "not duplicates" no longer shows.
         let mut ignored = find("c1").tracks.clone();
         ignored.sort();
         lib.ignored_duplicates.push(ignored);
@@ -590,7 +612,7 @@ mod tests {
             false
         });
         assert!(groups.is_empty());
-        assert!(calls < 3000 * 25, "ventana por duración: {calls} comparaciones");
+        assert!(calls < 3000 * 25, "a duration window: {calls} comparisons");
     }
 
     #[test]
@@ -599,7 +621,7 @@ mod tests {
         assert_eq!(safe_file_name("con", "x"), "x");
         assert_eq!(safe_file_name("COM1.mp3", "x"), "x");
         assert_eq!(safe_file_name("Comfort", "x"), "Comfort");
-        assert_eq!(safe_file_name("fin con punto. ", "x"), "fin con punto");
+        assert_eq!(safe_file_name("ends with a dot. ", "x"), "ends with a dot");
         assert_eq!(safe_file_name("   ", "x"), "x");
         assert_eq!(safe_file_name("a\u{0}b\nc", "x"), "a_b_c");
         assert_eq!(safe_file_name(&"á".repeat(300), "x").chars().count(), 100);

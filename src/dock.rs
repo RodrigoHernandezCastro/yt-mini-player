@@ -1,57 +1,57 @@
-//! Dónde va la barra de música dentro de la barra de tareas.
+//! Where the music bar goes inside the taskbar.
 //!
-//! Lógica pura (sin Win32) para poder probarla: recibe los rectángulos que
-//! lee `taskbar` y decide el hueco.
+//! Pure logic (no Win32) so it can be tested: it receives the rectangles
+//! `taskbar` reads and decides the slot.
 //!
-//! - Automático (`shift == 0`): pegada a la izquierda del área de
-//!   notificación (reloj, iconos de la bandeja). Si se sabe dónde acaban los
-//!   iconos de las apps (UI Automation), no los tapa: se estrecha hasta
-//!   `MIN_WIDTH` para caber en el hueco.
-//! - Manual: el usuario la arrastra a lo largo de la barra de tareas y se
-//!   recuerda cuánto la movió (`shift`, px lógicos hacia la izquierda desde
-//!   la posición de ancho completo junto a la bandeja).
+//! - Automatic (`shift == 0`): right next to the left of the notification
+//!   area (clock, tray icons). If it is known where the app icons end (UI
+//!   Automation), it does not cover them: it narrows down to `MIN_WIDTH` to
+//!   fit in the gap.
+//! - Manual: the user drags it along the taskbar and how far it was moved is
+//!   remembered (`shift`, logical px to the left of the full-width position
+//!   next to the tray).
 
 use crate::platform::Rect;
 
-/// Ancho normal de la barra (px lógicos; se escala con el DPI).
+/// The bar's normal width (logical px; scaled with the DPI).
 pub const WIDTH: f64 = 360.0;
-/// Lo más que se estrecha para no tapar iconos (sin la onda de audio).
+/// The narrowest it gets so as not to cover icons (without the audio wave).
 pub const MIN_WIDTH: f64 = 250.0;
-/// Alto cuando no se puede anclar (barra de tareas vertical o inexistente).
+/// Height when it cannot dock (vertical or missing taskbar).
 pub const FLOAT_HEIGHT: f64 = 48.0;
-/// Margen arriba y abajo dentro de la barra de tareas.
+/// Margin above and below inside the taskbar.
 const INSET: f64 = 4.0;
-/// Separación respecto a la bandeja, a los iconos y al borde izquierdo.
+/// Gap to the tray, the icons and the left edge.
 const GAP: f64 = 6.0;
 const MIN_HEIGHT: f64 = 26.0;
-/// Si no se encuentra el área de notificación, se supone que mide esto.
+/// If the notification area is not found, it is assumed to be this wide.
 const TRAY_FALLBACK: f64 = 300.0;
-/// Un elemento más ancho que esto no es un icono sino un contenedor.
+/// An item wider than this is not an icon but a container.
 const MAX_ITEM_WIDTH: f64 = 400.0;
 
-/// Lo que se sabe de la barra de tareas principal (px físicos).
+/// What is known about the main taskbar (physical px).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Taskbar {
     pub rect: Rect,
-    /// Monitor donde está.
+    /// The monitor it is on.
     pub monitor: Rect,
-    /// Área de notificación (`TrayNotifyWnd`), si se encontró.
+    /// Notification area (`TrayNotifyWnd`), if found.
     pub tray: Option<Rect>,
-    /// Borde derecho del último icono de app (si UI Automation respondió).
+    /// Right edge of the last app icon (if UI Automation answered).
     pub icons_right: Option<i32>,
     /// DPI / 96.
     pub scale: f64,
 }
 
-/// Hueco disponible para la barra (px físicos).
+/// Slot available for the bar (physical px).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Layout {
     pub min_x: i32,
-    /// Borde derecho máximo (justo antes de la bandeja).
+    /// Largest right edge (just before the tray).
     pub right: i32,
     pub y: i32,
     pub height: i32,
-    /// Ancho completo y ancho en la posición automática.
+    /// Full width and width in the automatic position.
     pub full_width: i32,
     pub auto_width: i32,
     pub scale: f64,
@@ -60,10 +60,10 @@ pub struct Layout {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Placement {
     Docked(Layout),
-    /// La barra de tareas está escondida (auto-ocultar) o tapada por una
-    /// app a pantalla completa: la barra también se esconde.
+    /// The taskbar is hidden (auto-hide) or covered by a fullscreen app: the
+    /// bar hides too.
     Hidden,
-    /// Barra de tareas vertical, inexistente o sin sitio: barra flotante.
+    /// Vertical, missing or full taskbar: a floating bar.
     Unavailable,
 }
 
@@ -75,8 +75,8 @@ pub fn place(taskbar: &Taskbar, fullscreen_in_front: bool) -> Placement {
     if width <= 0 || height <= 0 || height > width {
         return Placement::Unavailable;
     }
-    // Con auto-ocultar, la barra de tareas se desliza fuera del monitor y
-    // solo asoma una línea.
+    // With auto-hide, the taskbar slides off the monitor and only a line
+    // peeks out.
     let top = r.top.max(taskbar.monitor.top);
     let bottom = r.bottom.min(taskbar.monitor.bottom);
     let visible = bottom - top;
@@ -93,7 +93,7 @@ pub fn place(taskbar: &Taskbar, fullscreen_in_front: bool) -> Placement {
     if right - full_width < min_x {
         return Placement::Unavailable;
     }
-    // Hueco entre el último icono y la bandeja.
+    // Gap between the last icon and the tray.
     let auto_width = match taskbar.icons_right.filter(|&x| x > r.left && x < right) {
         Some(icons_right) => (right - (icons_right + px(GAP))).clamp(px(MIN_WIDTH), full_width),
         None => full_width,
@@ -110,7 +110,7 @@ fn tray_left(taskbar: &Taskbar, top: i32, bottom: i32) -> Option<i32> {
 }
 
 impl Layout {
-    /// Dónde va con el desplazamiento guardado (0 = automático).
+    /// Where it goes with the saved offset (0 = automatic).
     pub fn rect(&self, shift: i32) -> Rect {
         let (x, width) = if shift <= 0 {
             (self.right - self.auto_width, self.auto_width)
@@ -122,13 +122,13 @@ impl Layout {
         Rect { left: x, top: self.y, right: x + width, bottom: self.y + self.height }
     }
 
-    /// Límites de `x` al arrastrar una barra de ancho `width`.
+    /// Limits of `x` when dragging a bar `width` wide.
     pub fn drag_range(&self, width: i32) -> (i32, i32) {
         (self.min_x, (self.right - width).max(self.min_x))
     }
 
-    /// Desplazamiento (px lógicos) que corresponde a dejarla en `x`. Pegada
-    /// a la bandeja vuelve a ser automática (0).
+    /// Offset (logical px) that leaving it at `x` means. Next to the tray it
+    /// becomes automatic again (0).
     pub fn shift_for(&self, x: i32) -> i32 {
         let default_x = self.right - self.full_width;
         let x = x.max(self.min_x);
@@ -140,12 +140,12 @@ impl Layout {
     }
 }
 
-/// Borde derecho del último icono de app, a partir de los elementos que
-/// UI Automation encontró en la barra de tareas: (rectángulo, clase).
+/// Right edge of the last app icon, from the items UI Automation found in
+/// the taskbar: (rectangle, class).
 ///
-/// Se descartan contenedores (muy anchos), lo que no está a la altura de la
-/// barra de tareas, la bandeja y el reloj (por posición y por clase) y el
-/// botón "Mostrar escritorio".
+/// Containers (very wide), whatever is not at the taskbar's height, the tray
+/// and the clock (by position and by class) and the "Show desktop" button
+/// are left out.
 pub fn icons_right(items: &[(Rect, String)], taskbar: Rect, tray_left: Option<i32>, scale: f64) -> Option<i32> {
     let height = taskbar.bottom - taskbar.top;
     let limit = tray_left.unwrap_or(taskbar.right);
@@ -173,7 +173,7 @@ mod tests {
 
     const MONITOR: Rect = Rect { left: 0, top: 0, right: 1920, bottom: 1080 };
 
-    /// Windows 11 a 100 %: barra de 48 px, bandeja de 260 px.
+    /// Windows 11 at 100%: a 48 px taskbar, a 260 px tray.
     fn win11() -> Taskbar {
         Taskbar {
             rect: Rect { left: 0, top: 1032, right: 1920, bottom: 1080 },
@@ -187,7 +187,7 @@ mod tests {
     fn docked(p: Placement) -> Layout {
         match p {
             Placement::Docked(layout) => layout,
-            other => panic!("esperaba anclada, fue {other:?}"),
+            other => panic!("expected docked, got {other:?}"),
         }
     }
 
@@ -201,24 +201,24 @@ mod tests {
 
     #[test]
     fn narrows_to_leave_the_app_icons_visible() {
-        // Iconos centrados que acaban en x = 1200: quedan 448 px; cabe entera.
+        // Centred icons ending at x = 1200: 448 px left; it fits whole.
         let roomy = docked(place(&Taskbar { icons_right: Some(1200), ..win11() }, false));
         assert_eq!(roomy.auto_width, 360);
-        // Acaban en 1360: hueco de 288 px → se estrecha.
+        // Ending at 1360: a 288 px gap → it narrows.
         let tight = docked(place(&Taskbar { icons_right: Some(1360), ..win11() }, false));
         assert_eq!(tight.auto_width, 1654 - 1366);
-        assert_eq!(tight.rect(0).left, 1366, "empieza justo después del último icono");
-        // Sin sitio ni para el mínimo: usa el mínimo (y se puede arrastrar).
+        assert_eq!(tight.rect(0).left, 1366, "it starts right after the last icon");
+        // No room even for the minimum: it uses the minimum (and can be dragged).
         let full = docked(place(&Taskbar { icons_right: Some(1600), ..win11() }, false));
         assert_eq!(full.auto_width, 250);
-        // Un valor absurdo se ignora.
+        // An absurd value is ignored.
         let bogus = docked(place(&Taskbar { icons_right: Some(5000), ..win11() }, false));
         assert_eq!(bogus.auto_width, 360);
     }
 
     #[test]
     fn scales_with_dpi() {
-        // 150 %: barra de tareas de 72 px.
+        // 150%: a 72 px taskbar.
         let tb = Taskbar {
             rect: Rect { left: 0, top: 2088, right: 3840, bottom: 2160 },
             monitor: Rect { left: 0, top: 0, right: 3840, bottom: 2160 },
@@ -229,20 +229,20 @@ mod tests {
         let l = docked(place(&tb, false));
         assert_eq!((l.full_width, l.height), (540, 60));
         assert_eq!(l.rect(0).left, 3400 - 9 - 540);
-        assert_eq!(l.rect(100).left, l.rect(0).left - 150, "el desplazamiento también se escala");
+        assert_eq!(l.rect(100).left, l.rect(0).left - 150, "the offset scales too");
         assert_eq!(l.shift_for(l.rect(100).left), 100);
     }
 
     #[test]
     fn manual_position_is_clamped_and_round_trips() {
         let l = docked(place(&Taskbar { icons_right: Some(1360), ..win11() }, false));
-        // Arrastrada a la izquierda: ancho completo, donde la dejó.
+        // Dragged to the left: full width, where it was left.
         let r = l.rect(500);
         assert_eq!((r.left, r.right - r.left), (1654 - 360 - 500, 360));
         assert_eq!(l.shift_for(r.left), 500);
-        assert_eq!(l.rect(99_999).left, l.min_x, "no sale por la izquierda");
+        assert_eq!(l.rect(99_999).left, l.min_x, "it does not leave on the left");
         assert_eq!(l.min_x, 6);
-        // Soltada junto a la bandeja: vuelve a ser automática.
+        // Dropped next to the tray: it becomes automatic again.
         assert_eq!(l.shift_for(1600), 0);
         assert_eq!(l.shift_for(l.right - l.full_width), 0);
         assert_eq!(l.drag_range(288), (6, 1654 - 288));
@@ -261,10 +261,10 @@ mod tests {
 
     #[test]
     fn hides_when_taskbar_is_hidden_or_covered() {
-        // Auto-ocultar: solo asoman 2 px.
+        // Auto-hide: only 2 px peek out.
         let hidden = Taskbar { rect: Rect { left: 0, top: 1078, right: 1920, bottom: 1126 }, ..win11() };
         assert_eq!(place(&hidden, false), Placement::Hidden);
-        assert_eq!(place(&win11(), true), Placement::Hidden, "app a pantalla completa delante");
+        assert_eq!(place(&win11(), true), Placement::Hidden, "a fullscreen app in front");
     }
 
     #[test]
@@ -292,21 +292,21 @@ mod tests {
         let tb = win11().rect;
         let item = |l: i32, r: i32, class: &str| (Rect { left: l, top: 1032, right: r, bottom: 1080 }, class.to_owned());
         let items = vec![
-            item(0, 1920, "Shell_TrayWnd"),                          // la barra entera
-            item(10, 160, "Widgets"),                                // tiempo/widgets
-            item(700, 744, "ToggleButton"),                          // Inicio
+            item(0, 1920, "Shell_TrayWnd"),                          // the whole taskbar
+            item(10, 160, "Widgets"),                                // weather/widgets
+            item(700, 744, "ToggleButton"),                          // Start
             item(748, 792, "Taskbar.TaskListButtonAutomationPeer"),
-            item(1172, 1216, "Taskbar.TaskListButtonAutomationPeer"), // último icono
-            item(560, 1360, "Taskbar.TaskbarFrameAutomationPeer"),   // contenedor ancho
-            item(1640, 1660, "SystemTray.ChevronButton"),            // bandeja
+            item(1172, 1216, "Taskbar.TaskListButtonAutomationPeer"), // last icon
+            item(560, 1360, "Taskbar.TaskbarFrameAutomationPeer"),   // wide container
+            item(1640, 1660, "SystemTray.ChevronButton"),            // tray
             item(1700, 1800, "SystemTray.NormalButton"),
             item(1905, 1920, "ShowDesktopButton"),
-            (Rect { left: 1300, top: 900, right: 1340, bottom: 940 }, "Popup".to_owned()), // fuera de la barra
-            (Rect { left: 1250, top: 1050, right: 1290, bottom: 1056 }, "Línea".to_owned()), // demasiado bajo
+            (Rect { left: 1300, top: 900, right: 1340, bottom: 940 }, "Popup".to_owned()), // outside the taskbar
+            (Rect { left: 1250, top: 1050, right: 1290, bottom: 1056 }, "Line".to_owned()), // too short
         ];
         assert_eq!(icons_right(&items, tb, Some(1660), 1.0), Some(1216));
         assert_eq!(icons_right(&[], tb, Some(1660), 1.0), None);
-        // Windows 10: botones a la izquierda, bandeja "TrayNotifyWnd" aparte.
+        // Windows 10: buttons on the left, a separate "TrayNotifyWnd" tray.
         let win10 = vec![item(0, 48, "Start"), item(48, 392, "TrayButton"), item(400, 460, ""), item(460, 520, "")];
         assert_eq!(icons_right(&win10, tb, Some(1700), 1.0), Some(520));
     }

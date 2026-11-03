@@ -1,74 +1,108 @@
 <!doctype html>
-<html lang="es">
+<html lang="__YTMP_LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bloqueado</title>
+<title data-i18n="lock.document_title"></title>
 <style>
+  /* The palette, deepest to lightest. */
   :root {
-    --bg-1: #0d1124;
-    --bg-2: #171c38;
-    --card: rgba(255, 255, 255, .04);
-    --line: rgba(194, 179, 255, .18);
-    --lavender: #c2b3ff;
-    --lavender-dim: #8f84c9;
-    --text: #f4f2ff;
-    --muted: #a8a2cc;
-    --danger: #ff9aa8;
-    --display: "Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --deep-twilight: #03045e;
+    --french-blue: #023e8a;
+    --bright-teal-blue: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise-surf: #00b4d8;
+    --sky-aqua: #48cae4;
+    --frosted-blue: #90e0ef;
+    --frosted-blue-2: #ade8f4;
+    --light-cyan: #caf0f8;
+    /* What each one does: the deep ones are the water, the light ones the
+       text, turquoise is what you can press. */
+    --ground: var(--deep-twilight);
+    --surface: rgba(2, 62, 138, .38);
+    --surface-strong: var(--french-blue);
+    --line: var(--french-blue);
+    --line-strong: var(--bright-teal-blue);
+    --text: var(--light-cyan);
+    --text-2: var(--frosted-blue-2);
+    --text-3: var(--frosted-blue);
+    --dim: rgba(144, 224, 239, .62);
+    --accent: var(--turquoise-surf);
+    --accent-hover: var(--sky-aqua);
+    --link: var(--sky-aqua);
+    --alert: #ff9f8a;
+    --tide: linear-gradient(90deg, var(--bright-teal-blue), var(--blue-green), var(--turquoise-surf), var(--sky-aqua), var(--frosted-blue), var(--frosted-blue-2), var(--light-cyan));
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
+  html { background: var(--ground); }
   body {
     display: grid; place-items: center; overflow: hidden; user-select: none;
-    background: radial-gradient(120% 90% at 50% 0%, var(--bg-2), var(--bg-1));
+    background: radial-gradient(70% 60% at 50% 0%, rgba(0, 119, 182, .3), transparent 70%);
     color: var(--text); font: 13px/1.4 var(--body); -webkit-font-smoothing: antialiased;
   }
   [hidden] { display: none !important; }
-  main { width: min(340px, 100vw - 32px); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+  main { position: relative; z-index: 1; width: min(320px, 100vw - 32px); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+  /* The lock in a ring of the palette. */
   .badge {
-    width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; flex: none;
-    background: linear-gradient(140deg, rgba(194, 179, 255, .22), rgba(95, 134, 255, .12));
-    border: 1px solid var(--line); color: var(--lavender);
+    width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; flex: none; position: relative;
+    background: radial-gradient(circle at 50% 35%, var(--bright-teal-blue), var(--french-blue) 70%);
+    color: var(--light-cyan); box-shadow: 0 0 0 1px var(--blue-green), 0 0 0 6px rgba(0, 150, 199, .14), 0 8px 26px rgba(0, 180, 216, .25);
   }
-  .badge svg { width: 22px; height: 22px; }
-  h1 { margin: 0; font: 600 17px/1.2 var(--display); letter-spacing: .01em; }
-  .sub { margin: -4px 0 2px; color: var(--muted); }
+  .badge svg { width: 24px; height: 24px; stroke-width: 1.7; }
+  h1 { margin: 4px 0 0; font: 600 19px/1.2 var(--display); color: var(--light-cyan); }
+  .sub { margin: -4px 0 4px; color: var(--text-3); }
   form { width: 100%; display: flex; flex-direction: column; gap: 8px; margin: 0; }
+  /* The PIN: a line to write on, not a box. */
   input {
-    width: 100%; height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--line);
-    background: rgba(0, 0, 0, .25); color: var(--text); font: 15px var(--body); letter-spacing: .12em; text-align: center;
-    outline: none; user-select: text;
+    width: 100%; height: 40px; padding: 0 12px; border: 0; border-bottom: 2px solid var(--french-blue); border-radius: 0;
+    background: transparent; color: var(--light-cyan); font: 18px var(--body); letter-spacing: .24em; text-align: center;
+    outline: none; user-select: text; transition: border-color .15s;
   }
-  input:focus { border-color: var(--lavender-dim); box-shadow: 0 0 0 3px rgba(194, 179, 255, .15); }
-  input::placeholder { letter-spacing: normal; color: #6f6a92; }
-  .buttons { display: flex; gap: 8px; width: 100%; }
+  input:focus { border-image: var(--tide) 1; }
+  input::placeholder { letter-spacing: normal; font-size: 13px; color: var(--dim); }
+  .buttons { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
   button {
-    flex: 1; height: 36px; border-radius: 9px; border: 1px solid var(--line); cursor: pointer;
-    background: var(--card); color: var(--text); font: 600 13px var(--display); letter-spacing: .02em;
+    flex: 1; height: 38px; border-radius: 19px; border: 1px solid var(--bright-teal-blue); cursor: pointer;
+    background: rgba(2, 62, 138, .4); color: var(--frosted-blue-2); font: 600 13px var(--body);
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   }
-  button.primary { background: linear-gradient(180deg, #cdbfff, #a996f5); color: #18143a; border-color: transparent; }
-  button:disabled { opacity: .5; cursor: default; }
+  button:hover:not(:disabled) { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  button.primary { background: linear-gradient(90deg, var(--blue-green), var(--turquoise-surf)); color: var(--deep-twilight); border-color: transparent; }
+  button.primary:hover:not(:disabled) { background: linear-gradient(90deg, var(--turquoise-surf), var(--sky-aqua)); color: var(--deep-twilight); }
+  button:focus-visible { outline: 2px solid var(--sky-aqua); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: default; }
   button svg { width: 16px; height: 16px; }
-  .status { min-height: 1.4em; color: var(--muted); font-size: 12px; }
-  .status.error { color: var(--danger); }
-  .hint { color: #7d779f; font-size: 11.5px; }
-  .link { flex: none; height: auto; border: 0; background: none; color: var(--lavender-dim); font: 12px var(--body); text-decoration: underline; cursor: pointer; padding: 2px; }
-  .link:hover { color: var(--lavender); }
-  /* Ventana muy pequeña: solo lo esencial. */
+  .status { min-height: 1.4em; color: var(--text-3); font-size: 12px; }
+  .status.error { color: var(--alert); }
+  .hint { color: var(--dim); font-size: 12px; }
+  .link { flex: none; height: auto; border: 0; background: none; color: var(--link); font: 12px var(--body); cursor: pointer; padding: 2px; }
+  .link:hover:not(:disabled) { background: none; color: var(--light-cyan); text-decoration: underline; }
+  /* Three slow waves along the bottom edge: the palette's water. */
+  .waves { position: fixed; left: 0; right: 0; bottom: 0; height: var(--waves-height, clamp(70px, 26vh, 180px)); pointer-events: none; z-index: 0; overflow: hidden; }
+  .waves svg { position: absolute; left: 0; bottom: 0; width: 200%; height: 100%; }
+  .waves .w1 { fill: var(--french-blue); opacity: .85; animation: drift 46s linear infinite; }
+  .waves .w2 { fill: var(--bright-teal-blue); opacity: .42; animation: drift 33s linear infinite reverse; }
+  .waves .w3 { fill: var(--blue-green); opacity: .34; animation: drift 25s linear infinite; }
+  @keyframes drift { to { transform: translateX(-50%); } }
+  @media (prefers-reduced-motion: reduce) { .waves .w1, .waves .w2, .waves .w3 { animation: none; } }
+
+  /* A very small window: only the essentials. */
   @media (max-height: 230px) {
     .sub, .hint { display: none; }
-    .badge { width: 32px; height: 32px; border-radius: 10px; }
+    .badge { width: 36px; height: 36px; }
+    .badge svg { width: 18px; height: 18px; }
     main { gap: 6px; }
     h1 { font-size: 14px; }
     input, button { height: 30px; }
+    .waves { --waves-height: 40px; }
   }
-  /* La ventana más pequeña (256×144): sin icono ni estado vacío. */
+  /* The smallest window (256×144): no icon, no empty status line, no waves. */
   @media (max-height: 170px) {
-    .badge, .link { display: none; }
+    .badge, .link, .waves { display: none; }
     h1 { font-size: 13px; }
     main { gap: 5px; }
     form { gap: 5px; }
@@ -82,35 +116,61 @@
     <div class="badge" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>
     </div>
-    <h1 id="title">YT Mini Player está bloqueado</h1>
-    <p class="sub" id="sub">Desbloquéalo para seguir viendo.</p>
+    <h1 id="title"></h1>
+    <p class="sub" id="sub"></p>
 
     <div class="buttons" id="hello-box">
       <button type="button" class="primary" id="hello">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 10v1M15 10v1M9.5 15.5c1.4 1 3.6 1 5 0"/><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
-        Usar Windows Hello
+        <span data-i18n="lock.use_hello"></span>
       </button>
     </div>
 
     <form id="pin-form" autocomplete="off">
-      <input id="pin" type="password" inputmode="numeric" maxlength="64" placeholder="PIN" aria-label="PIN" autocomplete="off" spellcheck="false">
-      <input id="pin2" type="password" inputmode="numeric" maxlength="64" placeholder="Repite el PIN" aria-label="Repite el PIN" autocomplete="off" spellcheck="false" hidden>
+      <input id="pin" type="password" inputmode="numeric" maxlength="64" autocomplete="off" spellcheck="false">
+      <input id="pin2" type="password" inputmode="numeric" maxlength="64" data-i18n-placeholder="lock.repeat_pin" data-i18n-aria-label="lock.repeat_pin" autocomplete="off" spellcheck="false" hidden>
       <div class="buttons">
-        <button type="button" id="cancel" hidden>Cancelar</button>
-        <button type="submit" class="primary" id="submit">Desbloquear</button>
+        <button type="button" id="cancel" data-i18n="common.cancel" hidden></button>
+        <button type="submit" class="primary" id="submit"></button>
       </div>
     </form>
-    <div class="buttons" id="cancel-box" hidden><button type="button" id="cancel2">Cancelar</button></div>
+    <div class="buttons" id="cancel-box" hidden><button type="button" id="cancel2" data-i18n="common.cancel"></button></div>
 
     <div class="status" id="status" role="status" aria-live="polite"></div>
-    <button type="button" class="link" id="forgot" hidden>¿Olvidaste el PIN?</button>
-    <div class="hint" id="hint" hidden>Mínimo 6 caracteres; ni repetidos (111111) ni seguidos (123456). Se guarda solo un hash Argon2id, cifrado.</div>
+    <button type="button" class="link" id="forgot" data-i18n="lock.forgot" hidden></button>
+    <div class="hint" id="hint" data-i18n="lock.hint" hidden></div>
   </main>
 
+  <div class="waves" aria-hidden="true">
+    <svg class="w1" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 70C100 40 200 40 300 70C400 100 500 100 600 70C700 40 800 40 900 70C1000 100 1100 100 1200 70V120H0Z"/></svg>
+    <svg class="w2" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 82C100 96 200 96 300 82C400 68 500 68 600 82C700 96 800 96 900 82C1000 68 1100 68 1200 82V120H0Z"/></svg>
+    <svg class="w3" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 98C100 90 200 90 300 98C400 106 500 106 600 98C700 90 800 90 900 98C1000 106 1100 106 1200 98V120H0Z"/></svg>
+  </div>
+
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
 <script>
 (() => {
   'use strict';
-  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* fuera de la app */ } };
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) { /* outside the app */ } };
+
+  // Strings in the app's language, embedded when the page is served (the
+  // app serves it again when the language changes).
+  const I18N = data.i18n || { lang: 'en', strings: {} };
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+  for (const attr of ['placeholder', 'aria-label', 'title']) {
+    for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
+  }
+
   const $ = (id) => document.getElementById(id);
   const els = {
     title: $('title'), sub: $('sub'), helloBox: $('hello-box'), hello: $('hello'), form: $('pin-form'),
@@ -129,16 +189,15 @@
     const s = state;
     const newPin = s.stage === 'new-pin';
     const usePin = newPin || s.method === 'pin';
-    els.title.textContent = newPin ? 'Crea un PIN para la app'
-      : s.stage === 'verify' ? 'Confirma que eres tú' : 'YT Mini Player está bloqueado';
-    els.sub.textContent = newPin ? 'Lo pedirá al abrir la app y al volver de la pantalla de bloqueo.'
-      : s.stage === 'verify' ? 'Para cambiar el bloqueo hay que verificarte.' : 'Desbloquéalo para seguir viendo.';
+    els.title.textContent = t(newPin ? 'lock.title_new_pin' : s.stage === 'verify' ? 'lock.title_verify' : 'lock.title_unlock');
+    els.sub.textContent = t(newPin ? 'lock.sub_new_pin' : s.stage === 'verify' ? 'lock.sub_verify' : 'lock.sub_unlock');
     els.helloBox.hidden = usePin;
     els.form.hidden = !usePin;
     els.pin2.hidden = !newPin;
     els.hint.hidden = !newPin;
-    els.pin.placeholder = newPin ? 'Nuevo PIN' : 'PIN';
-    els.submit.textContent = newPin ? 'Guardar PIN' : s.stage === 'verify' ? 'Confirmar' : 'Desbloquear';
+    els.pin.placeholder = t(newPin ? 'lock.new_pin' : 'lock.pin');
+    els.pin.setAttribute('aria-label', els.pin.placeholder);
+    els.submit.textContent = t(newPin ? 'lock.save_pin' : s.stage === 'verify' ? 'lock.confirm' : 'lock.unlock');
     els.cancel.hidden = !s.canCancel || !usePin;
     $('forgot').hidden = !(s.stage === 'unlock' && s.method === 'pin');
     $('forgot').disabled = s.busy;
@@ -154,7 +213,7 @@
     if (waiting) {
       let left = Math.ceil(s.wait);
       const tick = () => {
-        setStatus(`Demasiados intentos. Espera ${left} s.`, true);
+        setStatus(t('lock.too_many_attempts', { seconds: left }), true);
         if (left-- <= 0) { clearInterval(waitTimer); state.wait = 0; render(); }
       };
       tick();
@@ -162,7 +221,7 @@
     } else if (s.error) {
       setStatus(s.error, true);
     } else if (s.busy) {
-      setStatus(usePin ? 'Comprobando…' : 'Esperando a Windows Hello…');
+      setStatus(t(usePin ? 'lock.checking' : 'lock.waiting_hello'));
     } else {
       setStatus('');
     }
@@ -177,7 +236,7 @@
     if (!pin) return;
     if (state.stage === 'new-pin') {
       if (pin !== els.pin2.value) {
-        setStatus('Los dos PIN no coinciden', true);
+        setStatus(t('lock.pins_differ'), true);
         els.pin2.value = '';
         els.pin2.focus();
         return;
@@ -186,7 +245,7 @@
     } else {
       send('lock:pin:' + pin);
     }
-    // El PIN no se queda en la página.
+    // The PIN does not stay in the page.
     els.pin.value = '';
     els.pin2.value = '';
   });

@@ -1,10 +1,10 @@
-//! Funciones de sistema (Win32). Fuera de Windows hay versiones vacías para
-//! poder compilar y probar la lógica pura.
+//! System functions (Win32). Outside Windows there are empty versions so the
+//! pure logic can be compiled and tested.
 
 pub const APP_NAME: &str = "YT Mini Player";
 const WEBVIEW2_DOWNLOAD_URL: &str = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
-/// Rectángulo en píxeles físicos: izquierda, arriba, derecha, abajo.
+/// Rectangle in physical pixels: left, top, right, bottom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub left: i32,
@@ -13,11 +13,11 @@ pub struct Rect {
     pub bottom: i32,
 }
 
-/// Resultado de reclamar la instancia única.
+/// Result of claiming the single instance.
 pub enum Instance {
-    /// Somos la primera instancia.
+    /// We are the first instance.
     Primary(ActivationListener),
-    /// Ya había otra; se le pidió que se muestre y debemos salir.
+    /// There was another one; it was asked to show itself and we must quit.
     Secondary,
 }
 
@@ -39,7 +39,7 @@ mod win {
     use windows_sys::Win32::{
         Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY},
         Foundation::{
-            CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HWND, LPARAM, LRESULT, POINT,
+            CloseHandle, GetLastError, GlobalFree, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HWND, LPARAM, LRESULT, POINT,
             WPARAM,
         },
         Graphics::{
@@ -50,8 +50,11 @@ mod win {
             },
         },
         System::{
-            DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
-            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+                SetClipboardData,
+            },
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
             Ole::CF_UNICODETEXT,
             Registry::{
                 RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
@@ -59,13 +62,16 @@ mod win {
             },
             LibraryLoader::{GetProcAddress, LoadLibraryW},
             SystemInformation::{GetSystemDirectoryW, GetVersionExW, OSVERSIONINFOW},
-            Threading::{CreateEventW, GetCurrentProcess, OpenProcessToken, SetEvent, WaitForSingleObject, INFINITE},
+            Threading::{
+                CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken, SetEvent, WaitForSingleObject, INFINITE,
+                PROCESS_SYNCHRONIZE,
+            },
         },
         UI::{
             Shell::{DefSubclassProc, SetWindowSubclass, ShellExecuteW},
             WindowsAndMessaging::{
                 GetWindowLongPtrW, MessageBoxW, SetLayeredWindowAttributes, SetWindowLongPtrW, ShowWindow,
-                GWL_EXSTYLE, IDYES, LWA_ALPHA, MB_ICONERROR, MB_ICONWARNING, MB_YESNO, MA_NOACTIVATE, SW_HIDE,
+                GWL_EXSTYLE, LWA_ALPHA, MB_ICONERROR, MA_NOACTIVATE, SW_HIDE,
                 SW_SHOWNORMAL,
                 WM_MOUSEACTIVATE, WS_EX_LAYERED,
                 WS_EX_TRANSPARENT,
@@ -88,15 +94,14 @@ mod win {
     }
 
     pub fn prompt_install_webview2() {
-        let text = wide(
-            "No se encontró el runtime de Microsoft Edge WebView2, necesario \
-             para reproducir los videos.\n\n¿Abrir la página de descarga?",
-        );
-        let caption = wide(APP_NAME);
-        let answer = unsafe {
-            MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONWARNING)
+        let question = crate::security::Question {
+            title: APP_NAME,
+            heading: &t!("startup.webview2_title"),
+            text: &t!("startup.webview2_text"),
+            yes: &t!("startup.webview2_download"),
+            no: &t!("startup.webview2_later"),
         };
-        if answer == IDYES {
+        if crate::security::ask(0, &question) {
             open(OsStr::new(WEBVIEW2_DOWNLOAD_URL));
         }
     }
@@ -108,18 +113,18 @@ mod win {
         };
     }
 
-    /// Abre una carpeta en el Explorador.
+    /// Opens a folder in File Explorer.
     pub fn open_path(path: &Path) {
         open(path.as_os_str());
     }
 
-    /// Texto del portapapeles, si lo hay.
+    /// Text on the clipboard, if any.
     pub fn read_clipboard_text() -> Option<String> {
         unsafe {
             if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
                 return None;
             }
-            // Otro programa puede tener el portapapeles abierto un instante.
+            // Another program may hold the clipboard open for a moment.
             let mut opened = false;
             for _ in 0..5 {
                 if OpenClipboard(null_mut()) != 0 {
@@ -140,7 +145,7 @@ mod win {
                 if ptr.is_null() {
                     return None;
                 }
-                // Se limita a lo que mide el bloque, por si no hay NUL.
+                // Limited to the size of the block, in case there is no NUL.
                 let max = GlobalSize(handle) / 2;
                 let len = (0..max).take_while(|&i| *ptr.add(i) != 0).count();
                 let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
@@ -152,11 +157,53 @@ mod win {
         }
     }
 
-    /// Aplica opacidad y "clic a través" al HWND de nivel superior.
+    /// Puts text on the clipboard (the watch together code).
+    pub fn write_clipboard_text(text: &str) -> bool {
+        let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let mut opened = false;
+            for _ in 0..5 {
+                if OpenClipboard(null_mut()) != 0 {
+                    opened = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            if !opened {
+                return false;
+            }
+            let done = (|| {
+                if EmptyClipboard() == 0 {
+                    return false;
+                }
+                let block = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
+                if block.is_null() {
+                    return false;
+                }
+                let ptr = GlobalLock(block) as *mut u16;
+                if ptr.is_null() {
+                    GlobalFree(block);
+                    return false;
+                }
+                std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+                GlobalUnlock(block);
+                // On success the clipboard owns the block.
+                if SetClipboardData(CF_UNICODETEXT as u32, block).is_null() {
+                    GlobalFree(block);
+                    return false;
+                }
+                true
+            })();
+            CloseClipboard();
+            done
+        }
+    }
+
+    /// Applies opacity and "click-through" to the top-level HWND.
     ///
-    /// tao reescribe `GWL_EXSTYLE` completo cada vez que cambia una de sus
-    /// banderas (siempre visible, pantalla completa...), así que esto debe
-    /// llamarse de nuevo después de cada una de esas operaciones.
+    /// tao rewrites the whole `GWL_EXSTYLE` every time one of its flags
+    /// changes (always on top, fullscreen...), so this must be called again
+    /// after each of those operations.
     pub fn apply_window_effects(hwnd: isize, opacity_percent: u8, click_through: bool) {
         let hwnd = hwnd as HWND;
         let translucent = opacity_percent < 100;
@@ -176,8 +223,8 @@ mod win {
             if style != before {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
             }
-            // Una ventana con WS_EX_LAYERED es invisible hasta que se le
-            // asignan atributos: hay que llamarlo siempre que esté activo.
+            // A WS_EX_LAYERED window is invisible until it gets attributes:
+            // this must be called whenever the style is on.
             if style & WS_EX_LAYERED != 0 {
                 let alpha = (u32::from(opacity_percent.min(100)) * 255 / 100) as u8;
                 SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
@@ -197,18 +244,18 @@ mod win {
         }
     }
 
-    /// Área de trabajo del monitor que contiene el punto (x, y).
+    /// Work area of the monitor that contains the point (x, y).
     pub fn work_area_at(x: i32, y: i32) -> Option<Rect> {
         monitor_work_area(unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) })
     }
 
-    /// Área de trabajo del monitor principal (donde está la bandeja).
+    /// Work area of the primary monitor (where the tray is).
     pub fn primary_work_area() -> Option<Rect> {
         monitor_work_area(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })
     }
 
-    /// Que un clic en la ventana (o en el webview que contiene) nunca la
-    /// active: la app en primer plano lo sigue estando.
+    /// A click on the window (or the webview inside it) never activates it:
+    /// the app in the foreground stays there.
     pub fn never_activate_on_click(hwnd: isize) {
         unsafe extern "system" fn proc(
             hwnd: HWND,
@@ -230,11 +277,11 @@ mod win {
         unsafe { ShowWindow(hwnd as HWND, SW_HIDE) };
     }
 
-    /// Menús nativos (el de la bandeja) en oscuro, a juego con la app.
+    /// Native menus (the tray's) in dark mode, to match the app.
     ///
-    /// Usa las mismas funciones sin documentar de uxtheme que el Explorador
-    /// y tao (`SetPreferredAppMode` y `FlushMenuThemes`, ordinales 135 y
-    /// 136, desde Windows 10 1903). Si no existen, no hace nada.
+    /// Uses the same undocumented uxtheme functions as File Explorer and tao
+    /// (`SetPreferredAppMode` and `FlushMenuThemes`, ordinals 135 and 136,
+    /// since Windows 10 1903). If they don't exist, it does nothing.
     pub fn use_dark_menus() {
         const SET_PREFERRED_APP_MODE: usize = 135;
         const FLUSH_MENU_THEMES: usize = 136;
@@ -242,7 +289,7 @@ mod win {
         unsafe {
             let mut info: OSVERSIONINFOW = std::mem::zeroed();
             info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
-            // El manifiesto declara Windows 10, así que la versión es real.
+            // The manifest declares Windows 10, so the version is the real one.
             if GetVersionExW(&mut info) == 0 || info.dwMajorVersion < 10 || info.dwBuildNumber < 18362 {
                 return;
             }
@@ -261,9 +308,9 @@ mod win {
         }
     }
 
-    /// Colorea el borde fino que Windows 11 dibuja alrededor de la ventana.
-    /// Devuelve `false` en Windows 10, que no lo admite (ahí lo pinta la
-    /// página).
+    /// Colours the thin border Windows 11 draws around the window. Returns
+    /// `false` on Windows 10, which does not support it (the page paints it
+    /// there).
     pub fn set_border_color(hwnd: isize, (r, g, b): (u8, u8, u8)) -> bool {
         // COLORREF: 0x00BBGGRR.
         let color: u32 = u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16);
@@ -277,7 +324,7 @@ mod win {
         }
     }
 
-    /// Área de trabajo (sin barra de tareas) del monitor de la ventana.
+    /// Work area (without the taskbar) of the window's monitor.
     pub fn work_area(hwnd: isize) -> Option<Rect> {
         unsafe {
             let monitor = MonitorFromWindow(hwnd as HWND, MONITOR_DEFAULTTONEAREST);
@@ -291,12 +338,12 @@ mod win {
         }
     }
 
-    /// Escucha peticiones de "muéstrate" de instancias posteriores.
+    /// Listens for "show yourself" requests from later instances.
     pub struct ActivationListener(isize);
 
     impl ActivationListener {
-        /// Llama a `on_activate` (desde otro hilo) cada vez que alguien abre
-        /// el programa estando ya abierto.
+        /// Calls `on_activate` (from another thread) every time someone opens
+        /// the program while it is already running.
         pub fn listen(self, on_activate: impl Fn() + Send + 'static) {
             let handle = self.0;
             if handle == 0 {
@@ -311,13 +358,18 @@ mod win {
         }
     }
 
-    /// Reclama la instancia única. Si ya hay una abierta, le pide que se
-    /// muestre y devuelve `Secondary`.
-    pub fn claim_instance() -> Instance {
-        let name = wide(ACTIVATE_EVENT);
+    /// Claims the single instance. If one is already running, asks it to
+    /// show itself and returns `Secondary`.
+    /// `suffix`: another instance's name (the test build with its own data
+    /// folder, see e2e.rs).
+    pub fn claim_instance(suffix: Option<&str>) -> Instance {
+        let name = wide(&match suffix {
+            Some(suffix) => format!("{ACTIVATE_EVENT}.{suffix}"),
+            None => ACTIVATE_EVENT.to_owned(),
+        });
         let handle = unsafe { CreateEventW(null(), 0, 0, name.as_ptr()) };
         if handle.is_null() {
-            // No se pudo crear el evento: se sigue sin instancia única.
+            // The event could not be created: carry on without a single instance.
             return Instance::Primary(ActivationListener(0));
         }
         if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
@@ -330,7 +382,7 @@ mod win {
         Instance::Secondary
     }
 
-    /// ¿Corre este proceso con UIAccess (modo de superposición máxima)?
+    /// Does this process run with UIAccess (maximum overlay mode)?
     pub fn has_uiaccess() -> bool {
         unsafe {
             let mut token: HANDLE = null_mut();
@@ -357,7 +409,33 @@ mod win {
         (len > 0 && len < buffer.len()).then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..len])))
     }
 
-    /// ¿Está registrado el inicio con Windows?
+    /// Starts a new copy that waits for this one to quit (a setting that
+    /// needs a fresh start). Through ShellExecute, like the Run key: a
+    /// UIAccess build can only be started that way.
+    pub fn relaunch() -> io::Result<()> {
+        let exe = wide(std::env::current_exe()?);
+        let args = wide(format!("--wait-pid={}", std::process::id()));
+        let result = unsafe { ShellExecuteW(null_mut(), null(), exe.as_ptr(), args.as_ptr(), null(), SW_SHOWNORMAL) };
+        if result as isize > 32 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Waits (at most `timeout`) for a process to end.
+    pub fn wait_for_exit(pid: u32, timeout: Duration) {
+        unsafe {
+            let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if handle.is_null() {
+                return;
+            }
+            WaitForSingleObject(handle, timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32);
+            CloseHandle(handle);
+        }
+    }
+
+    /// Is starting with Windows registered?
     pub fn autostart_enabled() -> bool {
         let (key, value) = (wide(RUN_KEY), wide(APP_NAME));
         let mut size = 0u32;
@@ -375,7 +453,7 @@ mod win {
         status == ERROR_SUCCESS
     }
 
-    /// Registra o quita el inicio con Windows (arranca oculto en la bandeja).
+    /// Registers or removes starting with Windows (starts hidden in the tray).
     pub fn set_autostart(enabled: bool) -> io::Result<()> {
         let (key, value) = (wide(RUN_KEY), wide(APP_NAME));
         let status = unsafe {
@@ -393,7 +471,7 @@ mod win {
                 )
             } else {
                 let status = RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr());
-                // Si no existía, ya está desactivado.
+                // If it did not exist, it is already off.
                 if status == windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND {
                     ERROR_SUCCESS
                 } else {
@@ -427,17 +505,20 @@ mod stub {
         eprintln!("{APP_NAME}: {message}");
     }
     pub fn prompt_install_webview2() {
-        eprintln!("{APP_NAME}: falta el runtime de WebView2 ({WEBVIEW2_DOWNLOAD_URL})");
+        eprintln!("{APP_NAME}: the WebView2 runtime is missing ({WEBVIEW2_DOWNLOAD_URL})");
     }
     pub fn open_path(_: &Path) {}
     pub fn read_clipboard_text() -> Option<String> {
         None
     }
+    pub fn write_clipboard_text(_: &str) -> bool {
+        false
+    }
     pub fn apply_window_effects(_: isize, _: u8, _: bool) {}
     pub fn work_area(_: isize) -> Option<Rect> {
         None
     }
-    pub fn claim_instance() -> Instance {
+    pub fn claim_instance(_: Option<&str>) -> Instance {
         Instance::Primary(ActivationListener)
     }
     pub fn autostart_enabled() -> bool {
@@ -459,16 +540,20 @@ mod stub {
         false
     }
     pub fn set_autostart(_: bool) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "solo en Windows"))
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Windows only"))
     }
+    pub fn relaunch() -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "Windows only"))
+    }
+    pub fn wait_for_exit(_: u32, _: std::time::Duration) {}
 }
 
-/// Línea de comandos para la clave Run.
+/// Command line for the Run key.
 ///
-/// Un `.exe` con UIAccess solo puede arrancarse mediante ShellExecute (el
-/// servicio AppInfo valida su firma); la clave Run usa CreateProcess y
-/// fallaría con ERROR_ELEVATION_REQUIRED. `ShellExec_RunDLL` de shell32 hace
-/// ese ShellExecute sin abrir ninguna consola.
+/// A UIAccess `.exe` can only be started through ShellExecute (the AppInfo
+/// service checks its signature); the Run key uses CreateProcess and would
+/// fail with ERROR_ELEVATION_REQUIRED. shell32's `ShellExec_RunDLL` does
+/// that ShellExecute without opening any console.
 pub fn autostart_command(exe: &std::path::Path, uiaccess: bool, rundll32: Option<&std::path::Path>) -> String {
     match (uiaccess, rundll32) {
         (true, Some(rundll32)) => format!(
@@ -480,8 +565,8 @@ pub fn autostart_command(exe: &std::path::Path, uiaccess: bool, rundll32: Option
     }
 }
 
-/// Posición (esquina superior izquierda) para colocar una ventana de
-/// `size` en la esquina indicada del área de trabajo, con `margin`.
+/// Position (top-left corner) to place a window of `size` in the given
+/// corner of the work area, with `margin`.
 pub fn corner_position(
     area: Rect,
     size: (i32, i32),
@@ -497,14 +582,14 @@ pub fn corner_position(
         TopLeft | TopRight => area.top + margin,
         BottomLeft | BottomRight => area.bottom - size.1 - margin,
     };
-    // Si la ventana no cabe, se alinea al borde superior izquierdo.
+    // If the window does not fit, it aligns to the top-left edge.
     (x.max(area.left), y.max(area.top))
 }
 
-/// Dónde colocar una ventana emergente de `size` junto a `anchor` (el icono
-/// de la bandeja), dentro del área de trabajo `area`. Se adapta a la barra
-/// de tareas abajo, arriba, a la izquierda o a la derecha, y al panel de
-/// iconos ocultos (anchor dentro del área de trabajo).
+/// Where to place a popup of `size` next to `anchor` (the tray icon),
+/// inside the work area `area`. Adapts to a taskbar at the bottom, top,
+/// left or right, and to the hidden icons panel (anchor inside the work
+/// area).
 pub fn popup_position(area: Rect, anchor: (i32, i32), size: (i32, i32), margin: i32) -> (i32, i32) {
     let (ax, ay) = anchor;
     let (w, h) = size;
@@ -520,7 +605,7 @@ pub fn popup_position(area: Rect, anchor: (i32, i32), size: (i32, i32), margin: 
     } else if ax >= area.right {
         (area.right - w - margin, clamp_y(ay - h / 2))
     } else {
-        // Panel de iconos ocultos: encima del icono.
+        // Hidden icons panel: above the icon.
         (clamp_x(ax - w / 2), clamp_y(ay - h - margin))
     }
 }
@@ -563,16 +648,16 @@ mod tests {
         assert_eq!(corner_position(AREA, (4000, 3000), 16, Corner::BottomRight), (0, 0));
     }
 
-    // 1920×1080 con la barra de tareas abajo (48 px).
+    // 1920×1080 with the taskbar at the bottom (48 px).
     const TASKBAR_AREA: Rect = Rect { left: 0, top: 0, right: 1920, bottom: 1032 };
     const POPUP: (i32, i32) = (380, 160);
 
     #[test]
     fn taskbar_at_the_bottom() {
         assert_eq!(popup_position(TASKBAR_AREA, (1700, 1050), POPUP, 12), (1510, 860));
-        // Icono muy a la derecha: no se sale de la pantalla.
+        // Icon far to the right: it stays on the screen.
         assert_eq!(popup_position(TASKBAR_AREA, (1910, 1050), POPUP, 12), (1528, 860));
-        // Atajo de teclado (esquina inferior derecha).
+        // Keyboard shortcut (bottom-right corner).
         assert_eq!(popup_position(TASKBAR_AREA, (1919, 1032), POPUP, 12), (1528, 860));
     }
 
@@ -588,9 +673,9 @@ mod tests {
 
     #[test]
     fn overflow_panel_and_other_monitors() {
-        // Icono dentro del panel de iconos ocultos (sobre la barra).
+        // Icon inside the hidden icons panel (above the bar).
         assert_eq!(popup_position(TASKBAR_AREA, (1500, 950), POPUP, 12), (1310, 778));
-        // Monitor a la izquierda, con coordenadas negativas.
+        // Monitor on the left, with negative coordinates.
         let left_monitor = Rect { left: -1920, top: 0, right: 0, bottom: 1040 };
         assert_eq!(popup_position(left_monitor, (-100, 1060), POPUP, 12), (-392, 868));
     }

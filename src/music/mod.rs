@@ -1,14 +1,14 @@
-//! "Mi música": biblioteca local, descargas de música libre del Internet
-//! Archive, playlists y detección de canciones repetidas.
+//! "My music": local library, downloads of openly licensed music from the
+//! Internet Archive, playlists and finding repeated songs.
 //!
-//! - `library`: modelo y duplicados (puro).
-//! - `scan`: leer archivos (etiquetas, portada, huella del contenido).
-//! - `fingerprint`: huella acústica (Chromaprint).
-//! - `archive`: búsqueda y álbumes del Internet Archive (solo licencias libres).
-//! - `download`: cola de descargas reanudables y verificadas.
-//! - `serve`: canciones y portadas para la página (protocolo propio).
-//! - `service`: el hilo que lo coordina todo.
-//! - `os`: diálogos y Papelera de Windows.
+//! - `library`: model and duplicates (pure).
+//! - `scan`: reading files (tags, cover, content hash).
+//! - `fingerprint`: acoustic fingerprint (Chromaprint).
+//! - `archive`: Internet Archive search and albums (open licenses only).
+//! - `download`: queue of resumable, verified downloads.
+//! - `serve`: songs and covers for the page (own protocol).
+//! - `service`: the thread that coordinates it all.
+//! - `os`: Windows dialogs and Recycle Bin.
 
 pub mod archive;
 pub mod download;

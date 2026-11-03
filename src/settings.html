@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="__YTMP_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="settings.window_title"></title>
+<style>
+  /* The palette, deepest to lightest. */
+  :root {
+    --deep-twilight: #03045e;
+    --french-blue: #023e8a;
+    --bright-teal-blue: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise-surf: #00b4d8;
+    --sky-aqua: #48cae4;
+    --frosted-blue: #90e0ef;
+    --frosted-blue-2: #ade8f4;
+    --light-cyan: #caf0f8;
+    /* What each one does: the deep ones are the water, the light ones the
+       text, turquoise is what you can press. */
+    --ground: var(--deep-twilight);
+    --rail: rgba(2, 62, 138, .32);
+    --line: rgba(0, 119, 182, .45);
+    --line-strong: var(--bright-teal-blue);
+    --text: var(--light-cyan);
+    --text-2: var(--frosted-blue-2);
+    --text-3: var(--frosted-blue);
+    --dim: rgba(144, 224, 239, .7);
+    --accent: var(--turquoise-surf);
+    --accent-hover: var(--sky-aqua);
+    --alert: #ff9f8a;
+    --tide: linear-gradient(90deg, var(--bright-teal-blue), var(--blue-green), var(--turquoise-surf), var(--sky-aqua), var(--frosted-blue), var(--frosted-blue-2), var(--light-cyan));
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  html { background: var(--ground); }
+  body {
+    color: var(--text); font: 13px/1.45 var(--body); -webkit-font-smoothing: antialiased;
+    display: grid; grid-template-columns: 208px minmax(0, 1fr); overflow: hidden;
+    background:
+      radial-gradient(70% 60% at 100% 0%, rgba(0, 119, 182, .26), transparent 70%),
+      var(--ground);
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0 0 auto 0; height: 3px; background: var(--tide); z-index: 2;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--sky-aqua); outline-offset: 2px; }
+
+  /* --- Sections rail -------------------------------------------------- */
+  nav {
+    display: flex; flex-direction: column; gap: 2px; padding: 22px 12px 14px; min-height: 0;
+    background: var(--rail); border-right: 1px solid var(--line); overflow: auto;
+  }
+  nav h1 { margin: 0 10px 14px; font: 600 20px/1.2 var(--display); color: var(--light-cyan); }
+  #tabs { display: flex; flex-direction: column; gap: 2px; }
+  .tab {
+    display: flex; align-items: center; gap: 11px; width: 100%; min-height: 36px; padding: 6px 10px;
+    border: 0; border-radius: 8px; background: none; color: var(--text-3); text-align: left;
+    position: relative;
+  }
+  .tab svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6;
+             stroke-linecap: round; stroke-linejoin: round; }
+  .tab span { min-width: 0; overflow-wrap: anywhere; }
+  .tab:hover { background: rgba(0, 119, 182, .28); color: var(--text); }
+  .tab[aria-selected="true"] { background: rgba(0, 150, 199, .22); color: var(--light-cyan); font-weight: 600; }
+  .tab[aria-selected="true"]::before {
+    content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  .about { margin-top: auto; padding: 14px 10px 0; color: var(--dim); font-size: 12px; }
+
+  /* --- Content -------------------------------------------------------- */
+  main { min-height: 0; overflow: auto; padding: 26px 32px 40px; scrollbar-width: thin;
+         scrollbar-color: var(--bright-teal-blue) transparent; }
+  .page { max-width: 600px; }
+  .page h2 { margin: 0; font: 600 22px/1.25 var(--display); color: var(--light-cyan); }
+  .lede { margin: 4px 0 18px; color: var(--text-3); }
+  h3 { margin: 22px 0 4px; font: 600 13px/1.3 var(--body); color: var(--sky-aqua); }
+
+  .row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 18px;
+    padding: 12px 0; border-top: 1px solid var(--line);
+  }
+  .row:first-of-type { border-top: 0; }
+  .row.stack { grid-template-columns: minmax(0, 1fr); }
+  .row.stack .controls { justify-content: flex-start; }
+  .row > .wide { grid-column: 1 / -1; }
+  .label { font-weight: 600; color: var(--text); }
+  .sub { display: block; margin-top: 2px; font-weight: 400; color: var(--dim); font-size: 12.5px; }
+  .sub.warn { color: var(--alert); }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+  /* Switch */
+  .switch {
+    flex: none; position: relative; width: 44px; height: 24px; border-radius: 12px; border: 0; padding: 0;
+    background: var(--french-blue); box-shadow: inset 0 0 0 1px var(--bright-teal-blue); transition: background .15s;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 5px; left: 5px; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--frosted-blue); transition: transform .15s, background .15s;
+  }
+  .switch[aria-checked="true"] { background: linear-gradient(90deg, var(--blue-green), var(--sky-aqua)); box-shadow: none; }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); background: var(--deep-twilight); }
+  .switch:disabled { opacity: .45; cursor: default; }
+
+  /* Buttons */
+  .button {
+    min-height: 30px; padding: 4px 14px; border-radius: 15px; border: 1px solid var(--bright-teal-blue);
+    background: rgba(2, 62, 138, .5); color: var(--text-2); white-space: nowrap;
+  }
+  .button:hover { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--deep-twilight); font-weight: 600; }
+  .button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .button.danger:hover { background: var(--alert); border-color: var(--alert); color: var(--deep-twilight); }
+  .button:disabled { opacity: .45; cursor: default; background: none; color: var(--text-3); }
+
+  /* Choices (radio groups) */
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; }
+  .choice {
+    min-height: 30px; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--line-strong);
+    background: none; color: var(--text-2);
+  }
+  .choice:hover { background: rgba(0, 119, 182, .35); color: var(--light-cyan); }
+  .choice[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: var(--deep-twilight); font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-top: 8px; }
+  .card {
+    display: block; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-strong);
+    background: rgba(2, 62, 138, .3); color: var(--text);
+  }
+  .card:hover { background: rgba(0, 119, 182, .3); }
+  .card[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: rgba(0, 180, 216, .14); }
+  .card strong { display: flex; align-items: center; gap: 8px; }
+  .card strong::before {
+    content: ""; flex: none; width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--frosted-blue);
+  }
+  .card[aria-checked="true"] strong::before { box-shadow: inset 0 0 0 4px var(--accent); }
+  .card .sub { margin-top: 4px; }
+
+  /* Opacity */
+  .range { display: flex; align-items: center; gap: 10px; }
+  input[type="range"] { width: 180px; accent-color: var(--accent); }
+  .value { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+
+  /* Corners: four buttons placed like the corners of a screen. */
+  .corners {
+    display: grid; grid-template-columns: repeat(2, 32px); grid-template-rows: repeat(2, 24px); gap: 4px;
+    padding: 4px; border: 1px solid var(--line-strong); border-radius: 8px; background: rgba(2, 62, 138, .3);
+  }
+  .corners button {
+    border: 0; border-radius: 5px; background: rgba(0, 119, 182, .25); color: var(--frosted-blue); line-height: 1;
+  }
+  .corners button:hover { background: var(--accent); color: var(--deep-twilight); }
+
+  /* Text field */
+  input[type="text"] {
+    width: 220px; max-width: 100%; height: 32px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--line-strong); background: rgba(3, 4, 94, .6); color: var(--text);
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--sky-aqua); box-shadow: 0 0 0 1px var(--sky-aqua); }
+  .saved { color: var(--accent); font-size: 12px; min-width: 1em; }
+
+  /* Extensions and shortcuts */
+  .list { list-style: none; margin: 6px 0 0; padding: 0; }
+  .list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 14px;
+             padding: 10px 0; border-top: 1px solid var(--line); }
+  .list li:first-child { border-top: 0; }
+  .link { border: 0; background: none; padding: 2px 4px; color: var(--sky-aqua); }
+  .link:hover { text-decoration: underline; }
+  .keys { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  kbd {
+    font: 12px/1 var(--body); padding: 4px 7px; border-radius: 5px; background: var(--french-blue);
+    color: var(--frosted-blue-2); box-shadow: inset 0 -1px 0 var(--bright-teal-blue); white-space: nowrap;
+  }
+  .off { color: var(--dim); }
+  .off kbd { opacity: .55; text-decoration: line-through; }
+  .notice {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; padding: 10px 12px;
+    border-radius: 10px; background: rgba(0, 180, 216, .12); border: 1px solid rgba(0, 180, 216, .5);
+  }
+  .notice p { margin: 0; flex: 1 1 200px; }
+  .empty { margin: 8px 0 0; color: var(--dim); }
+  .facts { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; color: var(--text-2); }
+  .facts dt { color: var(--dim); }
+  .facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+  /* Narrow window: the sections go across the top. */
+  @media (max-width: 620px) {
+    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    nav {
+      flex-direction: row; align-items: center; gap: 4px; padding: 12px 12px 8px; overflow-x: auto; overflow-y: hidden;
+      border-right: 0; border-bottom: 1px solid var(--line); scrollbar-width: none;
+    }
+    nav h1 { display: none; }
+    #tabs { flex-direction: row; gap: 4px; }
+    .tab { width: auto; flex: none; white-space: nowrap; min-height: 32px; }
+    .tab span { overflow-wrap: normal; }
+    .tab[aria-selected="true"]::before { left: 10px; right: 10px; top: auto; bottom: -8px; width: auto; height: 3px; border-radius: 3px 3px 0 0; }
+    .about { display: none; }
+    main { padding: 18px 18px 32px; }
+  }
+  @media (max-width: 480px) {
+    .row { grid-template-columns: minmax(0, 1fr); }
+    .controls { justify-content: flex-start; }
+    input[type="range"] { width: 150px; }
+    .tab svg { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch, .switch::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <nav aria-labelledby="settings-title">
+    <h1 id="settings-title" data-i18n="settings.title"></h1>
+    <div role="tablist" aria-orientation="vertical" id="tabs" data-i18n-aria-label="settings.sections"></div>
+    <p class="about" id="about"></p>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
+<script>
+(() => {
+  'use strict';
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  const I18N = data.i18n || { lang: 'en', languages: [], strings: {} };
+  // Own closed channel (ipc::parse_settings); outside the app it does nothing.
+  const send = (m) => { try { window.ipc.postMessage('settings:' + m); } catch (_) { /* outside the app */ } };
+  const $ = (id) => document.getElementById(id);
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+
+  // DOM without innerHTML: every text goes in as text.
+  function h(tag, props, ...children) {
+    const el = document.createElement(tag);
+    for (const [key, value] of Object.entries(props || {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === 'class') el.className = value;
+      else if (key === 'text') el.textContent = value;
+      else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
+      else el.setAttribute(key, value === true ? '' : String(value));
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return el;
+  }
+
+  function icon(paths) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of paths) {
+      const p = document.createElementNS(SVG_NS, 'path');
+      p.setAttribute('d', d);
+      svg.append(p);
+    }
+    return svg;
+  }
+
+  const SECTIONS = [
+    { id: 'general', icon: ['M4 7h10', 'M18 7h2', 'M4 17h4', 'M12 17h8', 'M16 5v4', 'M10 15v4'] },
+    { id: 'window', icon: ['M3.5 6.5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z', 'M3.5 8.5h17', 'M13 12.5h5v4h-5z'] },
+    { id: 'together', icon: ['M3 6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M8.5 7.6v4.8l3.9-2.4z', 'M7 19.5h12a2 2 0 0 0 2-2V9'] },
+    { id: 'privacy', icon: ['M12 3.5l7 2.6v5.4c0 4.4-2.9 7.6-7 9-4.1-1.4-7-4.6-7-9V6.1z', 'M9.3 12l2 2 3.6-3.8'] },
+    { id: 'extensions', icon: ['M9 4.5h4v2.2a1.8 1.8 0 1 0 3.6 0V4.5H19a1 1 0 0 1 1 1V9h-2.2a1.8 1.8 0 1 0 0 3.6H20V19a1 1 0 0 1-1 1h-3.5v-2.2a1.8 1.8 0 1 0-3.6 0V20H5a1 1 0 0 1-1-1v-6.4h2.2a1.8 1.8 0 1 0 0-3.6H4V5.5a1 1 0 0 1 1-1z'] },
+    { id: 'advanced', icon: ['M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z', 'M12 2.8v2.6', 'M12 18.6v2.6', 'M2.8 12h2.6', 'M18.6 12h2.6', 'M5.5 5.5l1.8 1.8', 'M16.7 16.7l1.8 1.8', 'M5.5 18.5l1.8-1.8', 'M16.7 7.3l1.8-1.8'] },
+  ];
+
+  // The app's state (App::push_settings); null until it arrives.
+  let state = null;
+  // The section on screen: kept across the reload a language change makes.
+  let current = 'general';
+  try { current = sessionStorage.getItem('ytmp-settings-section') || 'general'; } catch (_) { /* no storage */ }
+  if (!SECTIONS.some((s) => s.id === current)) current = 'general';
+
+  // --- Building blocks ---------------------------------------------------
+
+  const text = (label, sub, warn) => h('div', {},
+    h('span', { class: 'label', text: label }),
+    sub && h('span', { class: 'sub' + (warn ? ' warn' : ''), text: sub }));
+
+  let uid = 0;
+  // A row whose label names its control (for screen readers too).
+  function row(label, sub, control, opts = {}) {
+    const id = 'r' + (++uid);
+    const labelBox = h('div', {},
+      h('span', { class: 'label', id, text: label }),
+      sub && h('span', { class: 'sub' + (opts.warn ? ' warn' : ''), id: id + 'd', text: sub }));
+    // The control is named by the row's label and described by its line.
+    const target = control && control.matches && (control.matches('button, input, [role]') ? control
+      : control.querySelector('input, [role="switch"]'));
+    if (target && !target.hasAttribute('aria-label')) {
+      target.setAttribute('aria-labelledby', id);
+      if (sub) target.setAttribute('aria-describedby', id + 'd');
+    }
+    return h('div', { class: 'row' + (opts.stack ? ' stack' : ''), 'data-row': opts.name || null },
+      labelBox, control && h('div', { class: 'controls' }, control), opts.extra || null);
+  }
+
+  // A switch that shows the change at once; the app's state confirms it.
+  function toggle(name, on, disabled) {
+    return h('button', {
+      type: 'button', class: 'switch', role: 'switch', 'aria-checked': String(!!on), 'data-setting': name,
+      disabled: disabled || null,
+      onclick: (e) => {
+        const next = e.currentTarget.getAttribute('aria-checked') !== 'true';
+        e.currentTarget.setAttribute('aria-checked', String(next));
+        send(name + ':' + (next ? 1 : 0));
+      },
+    });
+  }
+
+  function button(label, message, cls) {
+    return h('button', { type: 'button', class: 'button' + (cls ? ' ' + cls : ''), text: label, 'data-send': message,
+      onclick: () => send(message) });
+  }
+
+  // A radio group: arrows move and choose, like any radio group.
+  function radios(items, checked, onChoose, cls = 'choice', label = null) {
+    const group = h('div', { role: 'radiogroup', class: cls === 'card' ? 'cards' : 'choices', 'aria-label': label });
+    const buttons = items.map((item) => {
+      const on = item.value === checked;
+      const b = h('button', {
+        type: 'button', class: cls, role: 'radio', 'aria-checked': String(on), tabindex: on ? '0' : '-1',
+        'data-value': item.value, lang: item.lang || null,
+        onclick: () => choose(item.value),
+      }, cls === 'card' ? [h('strong', { text: item.label }), item.sub && h('span', { class: 'sub', text: item.sub })] : item.label);
+      return b;
+    });
+    if (!buttons.some((b) => b.getAttribute('tabindex') === '0') && buttons[0]) buttons[0].setAttribute('tabindex', '0');
+    function choose(value) {
+      for (const b of buttons) {
+        const on = b.dataset.value === value;
+        b.setAttribute('aria-checked', String(on));
+        b.setAttribute('tabindex', on ? '0' : '-1');
+      }
+      onChoose(value);
+    }
+    group.addEventListener('keydown', (e) => {
+      const at = buttons.indexOf(document.activeElement);
+      if (at < 0) return;
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const next = buttons[(at + step + buttons.length) % buttons.length];
+      next.focus();
+      choose(next.dataset.value);
+    });
+    group.append(...buttons);
+    return group;
+  }
+
+  // --- Sections -----------------------------------------------------------
+
+  function general() {
+    let names = null;
+    try { names = new Intl.DisplayNames([I18N.lang], { type: 'language' }); } catch (_) { /* older engine */ }
+    const languages = radios(
+      I18N.languages.map((l) => ({ value: l.code, label: l.name, lang: l.code })),
+      I18N.lang,
+      (code) => { if (code !== I18N.lang) send('lang:' + code); },
+      'choice', t('lang.label'));
+    for (const b of languages.children) {
+      const local = names && b.dataset.value !== I18N.lang ? names.of(b.dataset.value) : '';
+      if (local && local.toLowerCase() !== b.textContent.toLowerCase()) b.title = local;
+    }
+    return [
+      row(t('lang.label'), t('settings.language_sub'), languages, { name: 'language', stack: true }),
+      row(t('settings.autostart'), t('settings.autostart_sub'), toggle('autostart', state.autostart), { name: 'autostart' }),
+      row(t('settings.start_with_last'), t('settings.start_with_last_sub'),
+        toggle('start-with-last', state.startWithLast), { name: 'start-with-last' }),
+      row(t('settings.welcome'), t('settings.welcome_sub'), button(t('settings.welcome_show'), 'welcome'), { name: 'welcome' }),
+    ];
+  }
+
+  // Opacity: applied while dragging (a few times a second at most).
+  function opacity() {
+    const value = h('span', { class: 'value', 'aria-hidden': 'true' });
+    const pct = (v) => { try { return new Intl.NumberFormat(I18N.lang, { style: 'percent' }).format(v / 100); } catch (_) { return v + '%'; } };
+    const input = h('input', { type: 'range', min: '20', max: '100', step: '5', value: String(state.opacity), 'data-setting': 'opacity' });
+    value.textContent = pct(state.opacity);
+    input.setAttribute('aria-valuetext', pct(state.opacity));
+    let timer = 0;
+    let last = state.opacity;
+    const flush = () => {
+      timer = 0;
+      const v = Number(input.value);
+      if (v !== last) { last = v; send('opacity:' + v); }
+    };
+    input.addEventListener('input', () => {
+      value.textContent = pct(input.value);
+      input.setAttribute('aria-valuetext', pct(input.value));
+      if (!timer) timer = setTimeout(flush, 120);
+    });
+    input.addEventListener('change', () => { clearTimeout(timer); flush(); });
+    return h('div', { class: 'range' }, input, value);
+  }
+
+  function windowSection() {
+    const sizes = h('div', { class: 'choices' },
+      ['s', 'm', 'l'].map((s) => h('button', {
+        type: 'button', class: 'choice', 'data-send': 'size:' + s, onclick: () => send('size:' + s),
+        text: t({ s: 'settings.size_small', m: 'settings.size_medium', l: 'settings.size_large' }[s]),
+      })));
+    sizes.setAttribute('role', 'group');
+    sizes.setAttribute('aria-label', t('settings.size'));
+    const corners = h('div', { class: 'corners', role: 'group', 'aria-label': t('settings.corner') },
+      [['nw', '↖', 'settings.corner_top_left'], ['ne', '↗', 'settings.corner_top_right'],
+        ['sw', '↙', 'settings.corner_bottom_left'], ['se', '↘', 'settings.corner_bottom_right']]
+        .map(([id, arrow, key]) => h('button', {
+          type: 'button', text: arrow, title: t(key), 'aria-label': t(key), 'data-send': 'corner:' + id,
+          onclick: () => send('corner:' + id),
+        })));
+    return [
+      row(t('settings.always_on_top'), t('settings.always_on_top_sub'), toggle('pin', state.pinned), { name: 'pin' }),
+      row(t('settings.opacity'), t('settings.opacity_sub'), opacity(), { name: 'opacity' }),
+      row(t('settings.ghost'), t(state.tray ? 'settings.ghost_sub' : 'settings.ghost_sub_no_tray'),
+        toggle('ghost', state.ghost), { name: 'ghost' }),
+      h('h3', { text: t('settings.size_and_place') }),
+      row(t('settings.size'), t('settings.size_sub'), sizes, { name: 'size' }),
+      row(t('settings.corner'), t('settings.corner_sub'), corners, { name: 'corner' }),
+      h('h3', { text: t('settings.playback') }),
+      row(t('settings.video_only'), t('settings.video_only_sub'), toggle('video-only', state.videoOnly), { name: 'video-only' }),
+      row(t('settings.fullscreen_in_window'), t('settings.fullscreen_in_window_sub'),
+        toggle('fullscreen-in-window', state.fullscreenInWindow), { name: 'fullscreen-in-window' }),
+      row(t('settings.taskbar_bar'), t('settings.taskbar_bar_sub'), toggle('taskbar-bar', state.taskbarBar), { name: 'taskbar-bar' }),
+    ];
+  }
+
+  function togetherSection() {
+    const saved = h('span', { class: 'saved', 'aria-live': 'polite' });
+    const input = h('input', {
+      type: 'text', maxlength: '32', spellcheck: 'false', autocomplete: 'off', value: state.togetherName || '',
+      placeholder: t('settings.together_name_placeholder'), 'data-setting': 'together-name',
+    });
+    let timer = 0;
+    let last = state.togetherName || '';
+    const flush = () => {
+      clearTimeout(timer);
+      timer = 0;
+      const value = input.value.trim();
+      if (value === last) return;
+      last = value;
+      send('together-name:' + value);
+      saved.textContent = t('settings.saved');
+      setTimeout(() => { saved.textContent = ''; }, 1600);
+    };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(flush, 700); });
+    input.addEventListener('change', flush);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') flush(); });
+    const nameControl = h('div', { class: 'controls' }, input, saved);
+    const modes = radios([
+      { value: 'share', label: t('settings.together_share'), sub: t('settings.together_share_sub') },
+      { value: 'sync', label: t('settings.together_sync'), sub: t('settings.together_sync_sub') },
+    ], state.togetherMode, (mode) => send('together-mode:' + mode), 'card', t('settings.together_mode'));
+    return [
+      row(t('settings.together_name'), t('settings.together_name_sub'), nameControl, { name: 'together-name' }),
+      h('div', { class: 'row stack', 'data-row': 'together-mode' },
+        text(t('settings.together_mode'), t('settings.together_mode_sub')), modes),
+      row(t('settings.together_open'), t(state.togetherActive ? 'settings.together_open_active' : 'settings.together_open_sub'),
+        button(t('settings.open'), 'together', 'primary'), { name: 'together' }),
+    ];
+  }
+
+  function privacySection() {
+    const lock = radios([
+      { value: 'off', label: t('settings.lock_off') },
+      { value: 'hello', label: t('settings.lock_hello') },
+      { value: 'pin', label: t('settings.lock_pin') },
+    ], state.lock, (mode) => send('lock:' + mode), 'choice', t('settings.lock'));
+    return [
+      h('div', { class: 'row stack', 'data-row': 'lock' }, text(t('settings.lock'), t('settings.lock_sub')), lock),
+      row(t('settings.lock_now'), t(state.lock === 'off' ? 'settings.lock_now_off' : 'settings.lock_now_sub'),
+        h('button', { type: 'button', class: 'button', text: t('settings.lock_now_button'), disabled: state.lock === 'off' || null,
+          'data-send': 'lock-now', onclick: () => send('lock-now') }), { name: 'lock-now' }),
+      row(t('settings.sign_out'), t('settings.sign_out_sub'), button(t('settings.sign_out_button'), 'sign-out', 'danger'),
+        { name: 'sign-out' }),
+      row(t('settings.security'), t('settings.security_sub'), button(t('settings.show'), 'security'), { name: 'security' }),
+    ];
+  }
+
+  function extensionsSection() {
+    const items = [];
+    for (const ext of state.extensions || []) {
+      let sub = ext.version ? t('settings.ext_version', { version: ext.version }) : '';
+      let warn = false;
+      if (ext.error) { sub = ext.error; warn = true; } else if (ext.pending) sub = t('settings.ext_installing');
+      const controls = h('div', { class: 'controls' });
+      if (ext.id && !ext.error) {
+        if (ext.hasPage) {
+          controls.append(h('button', { type: 'button', class: 'link', text: t('settings.ext_options'),
+            'data-send': 'ext-options:' + ext.id, onclick: () => send('ext-options:' + ext.id) }));
+        }
+        controls.append(h('button', {
+          type: 'button', class: 'switch', role: 'switch', 'aria-checked': String(!!ext.enabled), 'aria-label': ext.name,
+          'data-send': 'ext-toggle:' + ext.id,
+          onclick: (e) => { e.currentTarget.setAttribute('aria-checked', String(!ext.enabled)); send('ext-toggle:' + ext.id); },
+        }));
+      }
+      items.push(h('li', {}, text(ext.name, sub, warn), controls));
+    }
+    for (const problem of state.extensionProblems || []) {
+      items.push(h('li', {}, h('span', { class: 'sub warn', text: problem })));
+    }
+    const list = items.length ? h('ul', { class: 'list', 'aria-label': t('settings.section.extensions') }, items) : null;
+    return [
+      state.extensionsError ? h('p', { class: 'empty', text: state.extensionsError }) : null,
+      list || h('p', { class: 'empty', text: t('settings.ext_empty') }),
+      h('div', { class: 'row' }, text(t('settings.ext_folder'), t('settings.ext_folder_sub')),
+        h('div', { class: 'controls' }, button(t('settings.ext_open_folder'), 'ext-folder'), button(t('settings.ext_reload'), 'ext-reload'))),
+    ];
+  }
+
+  function advancedSection() {
+    const gpuChanged = state.hardwareAcceleration !== state.hardwareAccelerationNow;
+    const hotkeys = (state.hotkeys || []).map((k) => h('li', { class: k.available ? null : 'off' },
+      text(k.label, k.available ? null : t('settings.shortcut_unavailable', { reason: k.note || '' })),
+      h('span', { class: 'keys' }, h('kbd', { text: k.keys }))));
+    return [
+      row(t('settings.hardware_acceleration'), t('settings.hardware_acceleration_sub'),
+        toggle('hardware-acceleration', state.hardwareAcceleration), {
+          name: 'hardware-acceleration',
+          extra: gpuChanged ? h('div', { class: 'notice wide', role: 'status' },
+            h('p', { text: t('settings.restart_needed') }), button(t('settings.restart_now'), 'restart', 'primary')) : null,
+        }),
+      state.overlay ? row(t('settings.overlay'), t('settings.overlay_sub'), null, { name: 'overlay' }) : null,
+      h('h3', { text: t('settings.shortcuts') }),
+      hotkeys.length ? h('ul', { class: 'list', 'aria-label': t('settings.shortcuts') }, hotkeys) : null,
+      row(t('settings.shortcuts_window'), t('settings.shortcuts_window_sub'), button(t('settings.show'), 'help'), { name: 'help' }),
+      h('h3', { text: t('settings.about') }),
+      row(t('settings.diary'), t('settings.diary_sub'), button(t('settings.open_folder'), 'open-folder'), { name: 'diary' }),
+      h('dl', { class: 'facts' },
+        h('dt', { text: t('settings.version') }), h('dd', { text: state.version }),
+        h('dt', { text: t('settings.engine') }), h('dd', { text: state.webview || '—' })),
+    ];
+  }
+
+  const BUILD = {
+    general, window: windowSection, together: togetherSection, privacy: privacySection,
+    extensions: extensionsSection, advanced: advancedSection,
+  };
+
+  // --- Rail and page -------------------------------------------------------
+
+  const tabs = $('tabs');
+  const main = $('main');
+
+  function renderTabs() {
+    tabs.replaceChildren(...SECTIONS.map((s) => h('button', {
+      type: 'button', class: 'tab', role: 'tab', id: 'tab-' + s.id, 'aria-controls': 'page',
+      'aria-selected': String(s.id === current), tabindex: s.id === current ? '0' : '-1', 'data-section': s.id,
+      onclick: () => show(s.id, false),
+    }, icon(s.icon), h('span', { text: t('settings.section.' + s.id) }))));
+  }
+
+  tabs.addEventListener('keydown', (e) => {
+    const list = [...tabs.querySelectorAll('[role="tab"]')];
+    const at = list.indexOf(document.activeElement);
+    if (at < 0) return;
+    const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+    let next = null;
+    if (step) next = list[(at + step + list.length) % list.length];
+    else if (e.key === 'Home') next = list[0];
+    else if (e.key === 'End') next = list[list.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    show(next.dataset.section, true);
+  });
+
+  function renderPage() {
+    uid = 0;
+    if (!state) {
+      main.replaceChildren();
+      return;
+    }
+    const focused = document.activeElement;
+    const focusKey = focused && main.contains(focused)
+      ? (focused.dataset.setting || focused.dataset.send || (focused.getAttribute('role') === 'radio' && 'radio:' + focused.dataset.value) || null)
+      : null;
+    const scroll = main.scrollTop;
+    const page = h('section', { class: 'page', id: 'page', role: 'tabpanel', 'aria-labelledby': 'tab-' + current },
+      h('h2', { text: t('settings.section.' + current) }),
+      h('p', { class: 'lede', text: t('settings.lede.' + current) }),
+      BUILD[current]());
+    main.replaceChildren(page);
+    main.scrollTop = scroll;
+    // The control that had the focus keeps it after a redraw.
+    if (focusKey) {
+      const again = [...main.querySelectorAll('button, input')].find((el) =>
+        (el.dataset.setting || el.dataset.send || (el.getAttribute('role') === 'radio' && 'radio:' + el.dataset.value)) === focusKey);
+      if (again) again.focus();
+    }
+  }
+
+  // Only the six sections ("constructor" or "__proto__" are not sections).
+  const isSection = (id) => typeof id === 'string' && Object.prototype.hasOwnProperty.call(BUILD, id);
+
+  function show(id, focusTab) {
+    if (!isSection(id)) return;
+    const changed = id !== current;
+    current = id;
+    try { sessionStorage.setItem('ytmp-settings-section', id); } catch (_) { /* no storage */ }
+    renderTabs();
+    if (focusTab) $('tab-' + id).focus();
+    if (changed) main.scrollTop = 0;
+    renderPage();
+  }
+
+  // While typing a name, a new state does not redraw the field away.
+  const typing = () => document.activeElement && document.activeElement.matches('input[type="text"]');
+  let pendingRender = false;
+  document.addEventListener('focusout', () => {
+    if (pendingRender) setTimeout(() => { if (!typing() && pendingRender) { pendingRender = false; renderPage(); } }, 0);
+  });
+
+  // The app's state: on load, after every change, and with the section
+  // to open when it was asked for one (the start screen's "Extensions"…).
+  Object.defineProperty(window, '__ytmpSettings', {
+    value: (next) => {
+      if (!next || typeof next !== 'object') return;
+      state = next;
+      $('about').textContent = 'YT Mini Player ' + (next.version || '');
+      if (isSection(next.section)) {
+        show(next.section, false);
+        return;
+      }
+      if (typing()) { pendingRender = true; return; }
+      renderPage();
+    },
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.defaultPrevented) {
+      e.preventDefault();
+      send('close');
+    }
+  });
+  // No browser menu or text selection outside the fields.
+  document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input')) e.preventDefault(); });
+
+  document.documentElement.lang = I18N.lang;
+  for (const node of document.querySelectorAll('[data-i18n]')) node.textContent = t(node.dataset.i18n);
+  for (const node of document.querySelectorAll('[data-i18n-aria-label]')) node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  renderTabs();
+  send('ready');
+})();
+</script>
+</body>
+</html>

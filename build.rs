@@ -1,15 +1,14 @@
-//! Incrusta icono, versión y manifiesto en el `.exe` de Windows.
+//! Embeds the icon, version and manifest into the Windows `.exe`.
 //!
-//! Con MSVC usa `rc.exe` (viene con el Windows SDK de las Build Tools); al
-//! compilar desde Linux usa `x86_64-w64-mingw32-windres`. Si no hay
-//! compilador de recursos, el ejecutable se genera igual, sin icono propio.
+//! With MSVC it uses `rc.exe` (it comes with the Build Tools' Windows SDK);
+//! when building from Linux it uses `x86_64-w64-mingw32-windres`. Without a
+//! resource compiler the executable is built anyway, without its own icon.
 //!
-//! `YTMP_UIACCESS=1` genera la variante de **superposición máxima**: el
-//! manifiesto pide `uiAccess="true"`, lo que coloca las ventanas "siempre
-//! visible" en la banda de accesibilidad de Windows (la del teclado en
-//! pantalla), por encima de las apps a pantalla completa. Windows solo la
-//! deja arrancar si el `.exe` está firmado y en Archivos de programa; de eso
-//! se encarga `dist/install.ps1 -Overlay`.
+//! `YTMP_UIACCESS=1` builds the **maximum overlay** variant: the manifest
+//! asks for `uiAccess="true"`, which puts "always on top" windows in
+//! Windows' accessibility band (the on-screen keyboard's), above fullscreen
+//! apps. Windows only lets it start if the `.exe` is signed and in Program
+//! Files; `dist/install.ps1 -Overlay` takes care of that.
 
 fn manifest(uiaccess: bool) -> String {
     format!(
@@ -57,11 +56,11 @@ fn main() {
         .set("ProductName", "YT Mini Player")
         .set(
             "FileDescription",
-            if uiaccess { "YT Mini Player (superposición máxima)" } else { "YT Mini Player" },
+            if uiaccess { "YT Mini Player (maximum overlay)" } else { "YT Mini Player" },
         )
-        .set("LegalCopyright", "Proyecto personal")
+        .set("LegalCopyright", "Personal project")
         .set_manifest(&manifest(uiaccess));
     if let Err(err) = res.compile() {
-        println!("cargo:warning=no se incrustaron icono ni manifiesto en el .exe: {err}");
+        println!("cargo:warning=no icon or manifest embedded in the .exe: {err}");
     }
 }

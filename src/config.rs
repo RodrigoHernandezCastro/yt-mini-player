@@ -1,18 +1,16 @@
-//! Rutas de la aplicación y archivos de estado.
+//! Application paths and state files.
 //!
-//! Todo vive bajo `%LOCALAPPDATA%\yt_mini_player`:
-//! - `profile\`        → UserDataFolder de WebView2 (cookies, sesión, caché).
-//!   Chromium cifra cookies y contraseñas con una clave protegida por DPAPI;
-//!   además, la carpeta entera se cifra con EFS cuando Windows lo admite
-//!   (security.rs).
-//! - `extensions\`     → extensiones descomprimidas, `.crx` o `.zip`.
-//! - `vault.key`       → clave de la bóveda, envuelta por DPAPI (vault.rs).
-//! - `settings.enc`    → preferencias, PIN (hash Argon2id), extensiones aprobadas.
-//! - `window.enc`      → posición y tamaño de la ventana al cerrar.
-//! - `extensions.enc`  → carpeta de extensión → id instalado en WebView2.
+//! Everything lives under `%LOCALAPPDATA%\yt_mini_player`:
+//! - `profile\`        → WebView2 UserDataFolder (cookies, session, cache).
+//!   Chromium encrypts cookies with a key protected by DPAPI.
+//! - `extensions\`     → unpacked extensions, `.crx` or `.zip`.
+//! - `vault.key`       → the vault key, wrapped by the TPM and DPAPI (vault.rs).
+//! - `settings.enc`    → preferences, PIN (Argon2id hash), approved extensions.
+//! - `window.enc`      → window position and size on exit.
+//! - `extensions.enc`  → extension folder → id installed in WebView2.
 //!
-//! Los `.enc` van cifrados con AES-256-GCM. Las versiones anteriores
-//! guardaban `.json` en claro: se migran y se borran al primer arranque.
+//! The `.enc` files are encrypted with AES-256-GCM. Older versions kept
+//! plain `.json` files: they are migrated and deleted on first start.
 
 use std::{
     collections::BTreeMap,
@@ -28,8 +26,8 @@ use crate::{ipc::MIN_OPACITY, vault::Vault};
 
 const APP_DIR: &str = "yt_mini_player";
 
-/// Tamaño mínimo aceptado al restaurar (evita ventanas degeneradas por un
-/// archivo corrupto o editado a mano).
+/// Smallest size accepted when restoring (avoids degenerate windows from a
+/// corrupt or hand-edited file).
 const MIN_RESTORED_WIDTH: u32 = 160;
 const MIN_RESTORED_HEIGHT: u32 = 90;
 
@@ -48,18 +46,19 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// Resuelve las rutas y crea los directorios si no existen.
+    /// Resolves the paths and creates the folders if they don't exist.
     ///
-    /// Fijar el UserDataFolder es obligatorio: sin él, WebView2 intenta crear
-    /// la carpeta junto al ejecutable, lo que falla bajo `Program Files`.
+    /// Setting the UserDataFolder is mandatory: without it WebView2 tries to
+    /// create the folder next to the executable, which fails under
+    /// `Program Files`.
     pub fn resolve() -> io::Result<Self> {
         let base = directories::BaseDirs::new().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "no se pudo resolver %LOCALAPPDATA%")
+            io::Error::new(io::ErrorKind::NotFound, "could not resolve %LOCALAPPDATA%")
         })?;
         Self::under(base.data_local_dir().join(APP_DIR))
     }
 
-    fn under(root: PathBuf) -> io::Result<Self> {
+    pub fn under(root: PathBuf) -> io::Result<Self> {
         let paths = Self {
             profile: root.join("profile"),
             extensions: root.join("extensions"),
@@ -75,13 +74,13 @@ impl Paths {
     }
 }
 
-/// Lee un JSON en claro (solo para migrar archivos de versiones anteriores).
+/// Reads a plain JSON file (only to migrate files from older versions).
 fn load_legacy_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-/// Archivos de estado cifrados con la bóveda. Se puede clonar: la música
-/// guarda su biblioteca desde su propio hilo con la misma clave.
+/// State files encrypted with the vault. Cloneable: the music service saves
+/// its library from its own thread with the same key.
 #[derive(Clone)]
 pub struct Store {
     vault: Arc<Vault>,
@@ -92,14 +91,14 @@ impl Store {
         Self { vault: Arc::new(vault) }
     }
 
-    /// La bóveda (para atar su clave al TPM desde otro hilo).
+    /// The vault (to bind its key to the TPM from another thread).
     pub fn vault(&self) -> Arc<Vault> {
         self.vault.clone()
     }
 
-    /// Lee y descifra. Si no existe, migra el `.json` en claro de versiones
-    /// anteriores (y lo borra). Cualquier problema (modificado, de otra
-    /// clave, corrupto) devuelve `None`: la app sigue con valores por defecto.
+    /// Reads and decrypts. If missing, migrates the plain `.json` of older
+    /// versions (and deletes it). Any problem (tampered, another key,
+    /// corrupt) returns `None`: the app carries on with defaults.
     pub fn load<T: DeserializeOwned + Serialize>(&self, path: &Path, purpose: &str) -> Option<T> {
         match self.vault.read(path, purpose) {
             Ok(Some(bytes)) => serde_json::from_slice(&bytes).ok(),
@@ -112,7 +111,7 @@ impl Store {
                 Some(value)
             }
             Err(err) => {
-                eprintln!("no se pudo leer {}: {err}", path.display());
+                eprintln!("could not read {}: {err}", path.display());
                 None
             }
         }
@@ -124,7 +123,7 @@ impl Store {
     }
 }
 
-/// Cómo se desbloquea la app (lock.rs).
+/// How the app is unlocked (lock.rs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LockMode {
@@ -134,34 +133,50 @@ pub enum LockMode {
     Pin,
 }
 
-/// Preferencias del usuario. Los campos ausentes toman su valor por defecto,
-/// así que añadir campos en versiones futuras no rompe archivos antiguos.
+/// User preferences. Missing fields take their default value, so adding
+/// fields in future versions does not break older files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub always_on_top: bool,
-    /// Porcentaje, entre `MIN_OPACITY` y 100.
+    /// Percent, between `MIN_OPACITY` and 100.
     pub opacity: u8,
     pub video_only: bool,
-    /// Último servicio abierto (id del catálogo).
+    /// A video's own full-screen button fills the player window instead of
+    /// the screen (ui.js turns it into "full screen in the window").
+    pub fullscreen_in_window: bool,
+    /// Last service opened (catalog id).
     pub last_service: Option<String>,
-    /// Al arrancar, entrar directo al último servicio en vez del menú.
+    /// On start, open the last service straight away instead of the menu.
     pub start_with_last: bool,
-    /// Barra de música en la barra de tareas con servicios de música.
+    /// Music bar in the taskbar while a music service is open.
     pub taskbar_bar: bool,
-    /// Cuánto se arrastró la barra de música hacia la izquierda (px lógicos).
+    /// How far the music bar was dragged to the left (logical px).
     pub bar_shift: i32,
-    /// Bloqueo de la app.
+    /// App lock.
     pub lock: LockMode,
-    /// PIN en formato PHC de Argon2id (nunca el PIN).
+    /// The PIN as an Argon2id PHC string (never the PIN itself).
     pub pin_hash: Option<String>,
-    /// Intentos fallidos seguidos y hasta cuándo esperar (segundos Unix).
+    /// Failed attempts in a row and until when to wait (Unix seconds).
     pub lock_failures: u32,
     pub lock_blocked_until: u64,
-    /// Extensiones aprobadas o rechazadas: carpeta → huella SHA-256 de su
-    /// contenido. Si la extensión cambia, se vuelve a preguntar.
+    /// Approved or rejected extensions: folder → SHA-256 fingerprint of its
+    /// content. If the extension changes, the user is asked again.
     pub approved_extensions: BTreeMap<String, String>,
     pub rejected_extensions: BTreeMap<String, String>,
+    /// Interface language the user picked (`en`, `es`, `ru`, `pl`, `ja`);
+    /// `None` follows the Windows display language.
+    pub language: Option<String>,
+    /// Watch together: the name others see, the relay typed by hand (when
+    /// the build has none) and whether a session shares the host's window
+    /// (or syncs everyone's players).
+    pub together_name: String,
+    pub together_relay: Option<String>,
+    pub together_share: bool,
+    /// WebView2 may use the graphics card (applies on the next start).
+    pub hardware_acceleration: bool,
+    /// The first-run welcome on the start screen was seen (or skipped).
+    pub welcome_seen: bool,
 }
 
 impl Default for Settings {
@@ -170,6 +185,7 @@ impl Default for Settings {
             always_on_top: true,
             opacity: 100,
             video_only: false,
+            fullscreen_in_window: false,
             last_service: None,
             start_with_last: false,
             taskbar_bar: true,
@@ -180,6 +196,12 @@ impl Default for Settings {
             lock_blocked_until: 0,
             approved_extensions: BTreeMap::new(),
             rejected_extensions: BTreeMap::new(),
+            language: None,
+            together_name: String::new(),
+            together_relay: None,
+            together_share: true,
+            hardware_acceleration: true,
+            welcome_seen: false,
         }
     }
 }
@@ -189,14 +211,22 @@ impl Settings {
         let mut settings: Self = store.load(path, SETTINGS).unwrap_or_default();
         settings.opacity = settings.opacity.clamp(MIN_OPACITY, 100);
         settings.bar_shift = settings.bar_shift.clamp(0, 10_000);
-        // Un id que ya no existe en el catálogo se olvida.
+        // An id that is no longer in the catalog is forgotten.
         if settings.last_service.as_deref().is_some_and(|id| crate::services::by_id(id).is_none()) {
             settings.last_service = None;
         }
-        // Bloqueo por PIN sin PIN guardado (archivo dañado): sin bloqueo
-        // sería inseguro en silencio, así que se pasa a Windows Hello.
+        // PIN lock without a saved PIN (damaged file): no lock at all would be
+        // silently unsafe, so it switches to Windows Hello.
         if settings.lock == LockMode::Pin && settings.pin_hash.is_none() {
             settings.lock = LockMode::Hello;
+        }
+        settings.together_name = crate::together::protocol::clean_name(&settings.together_name);
+        if settings.together_relay.as_deref().is_some_and(|r| crate::together::link::parse_relay(r).is_none()) {
+            settings.together_relay = None;
+        }
+        // A language this version does not have: follow Windows instead.
+        if settings.language.as_deref().is_some_and(|code| crate::i18n::Lang::from_tag(code).is_none()) {
+            settings.language = None;
         }
         settings
     }
@@ -204,9 +234,14 @@ impl Settings {
     pub fn save(&self, store: &Store, path: &Path) -> io::Result<()> {
         store.save(path, SETTINGS, self)
     }
+
+    /// The language to show: the one picked, or else the Windows one.
+    pub fn language(&self) -> crate::i18n::Lang {
+        self.language.as_deref().and_then(crate::i18n::Lang::from_tag).unwrap_or_else(crate::i18n::detect)
+    }
 }
 
-/// Carpeta de extensión → id que le asignó WebView2 al instalarla.
+/// Extension folder → id WebView2 gave it on install.
 pub type ExtensionIds = BTreeMap<String, String>;
 
 pub fn load_extension_ids(store: &Store, path: &Path) -> ExtensionIds {
@@ -217,7 +252,7 @@ pub fn save_extension_ids(store: &Store, path: &Path, ids: &ExtensionIds) -> io:
     store.save(path, EXTENSIONS, ids)
 }
 
-/// Geometría en píxeles físicos, tal como la reporta el sistema.
+/// Geometry in physical pixels, as the system reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowGeometry {
     pub x: i32,
@@ -227,8 +262,8 @@ pub struct WindowGeometry {
 }
 
 impl WindowGeometry {
-    /// Devuelve `None` si el archivo no existe, no se puede leer o su
-    /// contenido no es razonable. Nunca es un error fatal.
+    /// `None` if the file is missing, unreadable or its content is not
+    /// sensible. Never a fatal error.
     pub fn load(store: &Store, path: &Path) -> Option<Self> {
         let geometry: Self = store.load(path, WINDOW)?;
         (geometry.width >= MIN_RESTORED_WIDTH && geometry.height >= MIN_RESTORED_HEIGHT)
@@ -239,12 +274,12 @@ impl WindowGeometry {
         store.save(path, WINDOW, self)
     }
 
-    /// Solape mínimo, en píxeles por eje, entre la ventana y un monitor para
-    /// considerar que el usuario puede alcanzarla con el ratón.
+    /// Minimum overlap, in pixels per axis, between the window and a monitor
+    /// for the user to be able to reach it with the mouse.
     pub const MIN_VISIBLE: i32 = 64;
 
-    /// ¿Esta geometría se solapa lo suficiente con el rectángulo de monitor
-    /// dado (x, y, ancho, alto)?
+    /// Does this geometry overlap the given monitor rectangle (x, y, width,
+    /// height) enough?
     pub fn overlaps(&self, monitor: (i32, i32, u32, u32)) -> bool {
         let (mx, my, mw, mh) = monitor;
         let overlap_x = (mx + mw as i32).min(self.x + self.width as i32) - mx.max(self.x);
@@ -309,12 +344,12 @@ mod tests {
         let g = geom(10, 20);
         g.save(&store, &path).unwrap();
         assert_eq!(WindowGeometry::load(&store, &path), Some(g));
-        assert!(!fs::read(&path).unwrap().windows(5).any(|w| w == b"width"), "cifrado en disco");
+        assert!(!fs::read(&path).unwrap().windows(5).any(|w| w == b"width"), "encrypted on disk");
 
         store.save(&path, WINDOW, &WindowGeometry { x: 0, y: 0, width: 5, height: 5 }).unwrap();
         assert_eq!(WindowGeometry::load(&store, &path), None);
 
-        fs::write(&path, "no es de la bóveda").unwrap();
+        fs::write(&path, "not from the vault").unwrap();
         assert_eq!(WindowGeometry::load(&store, &path), None);
 
         fs::remove_dir_all(&dir).unwrap();
@@ -329,17 +364,18 @@ mod tests {
 
         assert_eq!(Settings::load(&store, &path), Settings::default());
 
-        // Migración: el JSON en claro de versiones anteriores se cifra y se borra.
+        // Migration: the plain JSON of older versions is encrypted and deleted.
         fs::write(&legacy, r#"{"video_only":true,"opacity":3}"#).unwrap();
         let s = Settings::load(&store, &path);
         assert!(s.video_only && s.always_on_top && s.opacity == MIN_OPACITY);
-        assert!(!legacy.exists(), "el archivo en claro se borra tras migrar");
+        assert!(!legacy.exists(), "the plain file is deleted after migrating");
         assert!(path.exists() && Settings::load(&store, &path).video_only);
 
         let s = Settings {
             always_on_top: false,
             opacity: 70,
             video_only: true,
+            fullscreen_in_window: true,
             last_service: Some("crunchyroll".into()),
             start_with_last: true,
             taskbar_bar: false,
@@ -350,24 +386,40 @@ mod tests {
             lock_blocked_until: 1_800_000_000,
             approved_extensions: [("dark".to_owned(), "ab".repeat(32))].into(),
             rejected_extensions: BTreeMap::new(),
+            language: Some("pl".into()),
+            together_name: "Ana".into(),
+            together_relay: Some("wss://ytmp-together.example.workers.dev/".into()),
+            together_share: false,
+            hardware_acceleration: false,
+            welcome_seen: true,
         };
         s.save(&store, &path).unwrap();
         assert_eq!(Settings::load(&store, &path), s);
+        // A relay address that is not one is forgotten; a name is cleaned.
+        let odd = Settings { together_relay: Some("http://x".into()), together_name: " a\u{0}b ".into(), ..s.clone() };
+        odd.save(&store, &path).unwrap();
+        let loaded = Settings::load(&store, &path);
+        assert_eq!((loaded.together_relay, loaded.together_name.as_str()), (None, "a b"));
         let raw = fs::read(&path).unwrap();
-        assert!(!raw.windows(8).any(|w| w == b"argon2id"), "el hash del PIN tampoco queda legible");
+        assert!(!raw.windows(8).any(|w| w == b"argon2id"), "the PIN hash is not readable either");
 
-        // Campos que faltan en archivos viejos: la barra viene activada, sin bloqueo.
+        // Fields missing in old files: the bar is on, no lock.
         store.save(&path, SETTINGS, &serde_json::json!({"always_on_top": false})).unwrap();
         let s = Settings::load(&store, &path);
         assert!(s.taskbar_bar && s.bar_shift == 0 && s.lock == LockMode::Off);
-        store.save(&path, SETTINGS, &serde_json::json!({"bar_shift": -40, "last_service": "servicio-borrado"})).unwrap();
+        assert!(s.hardware_acceleration && s.together_share, "on unless turned off");
+        assert!(!s.welcome_seen, "the welcome shows once after updating too");
+        // 0.9's setting is simply forgotten.
+        store.save(&path, SETTINGS, &serde_json::json!({"together_control": true})).unwrap();
+        assert_eq!(Settings::load(&store, &path), Settings::default());
+        store.save(&path, SETTINGS, &serde_json::json!({"bar_shift": -40, "last_service": "deleted-service", "language": "xx"})).unwrap();
         let s = Settings::load(&store, &path);
-        assert_eq!((s.bar_shift, s.last_service), (0, None));
-        // PIN activado sin hash: no se queda sin bloqueo, pasa a Windows Hello.
+        assert_eq!((s.bar_shift, s.last_service, s.language), (0, None, None));
+        // PIN lock without a hash: it does not end up unlocked, it moves to Windows Hello.
         store.save(&path, SETTINGS, &serde_json::json!({"lock": "pin"})).unwrap();
         assert_eq!(Settings::load(&store, &path).lock, LockMode::Hello);
 
-        // Archivo manipulado: se ignora (valores por defecto), no se rompe.
+        // Tampered file: ignored (defaults), nothing breaks.
         let mut raw = fs::read(&path).unwrap();
         let last = raw.len() - 1;
         raw[last] ^= 0xff;
@@ -387,3 +439,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/config_cases.rs"]
+mod cases;

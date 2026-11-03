@@ -1,5 +1,5 @@
-// Pruebas de src/media.js con Media Session, reproductor de YouTube, video
-// genérico y reloj simulados.
+// Tests of src/media.js with a simulated Media Session, YouTube player,
+// generic video and clock.
 const fs = require('fs'), vm = require('vm'), path = require('path'), assert = require('assert');
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'media.js'), 'utf8');
 
@@ -14,7 +14,7 @@ function video(props = {}) {
   };
 }
 
-function env({ host = 'www.example.com', medias = [], yt = null, title = 'Página' } = {}) {
+function env({ host = 'www.example.com', medias = [], yt = null, title = 'Page', ad = false, netflix = null } = {}) {
   const sent = [], timers = [], listeners = {};
   let now = 0;
   const originalCalls = [];
@@ -22,17 +22,19 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   const mediaSession = new MediaSession();
   const window = {};
   window.top = window;
+  if (netflix) window.netflix = netflix;
   window.MediaSession = MediaSession;
   window.ipc = { postMessage: (m) => sent.push(m) };
   const document = {
     title,
     querySelectorAll: () => medias,
     getElementById: (id) => (id === 'movie_player' ? yt : null),
+    querySelector: (sel) => (ad && sel.includes('ad-showing') ? {} : null),
     addEventListener: (t, f) => (listeners[t] ||= []).push(f),
   };
   const ctx = {
     window, document, URL,
-    // El canal autenticado lo pone el envoltorio de webview.rs.
+    // The authenticated channel comes from webview.rs' wrapper.
     __ytmpSend: (m) => sent.push(m),
     location: { hostname: host, href: `https://${host}/watch?v=dQw4w9WgXcQ` },
     navigator: { mediaSession },
@@ -59,7 +61,7 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   return { window, mediaSession, sent, states, advance, fire, originalCalls };
 }
 
-// --- Controles declarados por el sitio --------------------------------------
+// --- Controls declared by the site ------------------------------------------
 {
   const v = video({ paused: false });
   const t = env({ host: 'www.netflix.com', medias: [v] });
@@ -67,52 +69,52 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   t.mediaSession.setActionHandler('nexttrack', (d) => calls.push(d.action));
   t.mediaSession.setActionHandler('seekto', (d) => calls.push('seekto:' + d.seekTime));
   t.mediaSession.setActionHandler('seekforward', (d) => calls.push('fwd:' + d.seekOffset));
-  assert.deepStrictEqual(t.originalCalls, ['nexttrack', 'seekto', 'seekforward'], 'se sigue llamando al original');
+  assert.deepStrictEqual(t.originalCalls, ['nexttrack', 'seekto', 'seekforward'], 'the original is still called');
 
   t.window.__ytmpMedia('next');
   t.window.__ytmpMedia('seek-to', 42);
   t.window.__ytmpMedia('seek-by', 10);
   assert.deepStrictEqual(calls, ['nexttrack', 'seekto:42', 'fwd:10']);
 
-  // Quitar un control (handler null) deja de usarlo.
+  // Removing a control (null handler) stops using it.
   t.mediaSession.setActionHandler('seekto', null);
   t.window.__ytmpMedia('seek-to', 99);
-  assert.strictEqual(v.currentTime, 0, 'en Netflix nunca se toca currentTime directamente');
+  assert.strictEqual(v.currentTime, 0, 'on Netflix currentTime is never touched directly');
   t.window.__ytmpMedia('seek-by', -10);
   assert.strictEqual(v.currentTime, 0);
 }
 
-// --- Video genérico -------------------------------------------------------------
+// --- Generic video ---------------------------------------------------------------
 {
   const v = video();
   const t = env({ medias: [v] });
   t.window.__ytmpMedia('toggle');
-  assert.strictEqual(v.paused, false, 'reproduce');
+  assert.strictEqual(v.paused, false, 'plays');
   t.window.__ytmpMedia('toggle');
-  assert.strictEqual(v.paused, true, 'pausa');
+  assert.strictEqual(v.paused, true, 'pauses');
   t.window.__ytmpMedia('seek-to', 120);
   assert.strictEqual(v.currentTime, 120);
   t.window.__ytmpMedia('seek-by', -30);
   assert.strictEqual(v.currentTime, 90);
   t.window.__ytmpMedia('seek-to', 9999);
-  assert.strictEqual(v.currentTime, 300, 'no pasa del final');
+  assert.strictEqual(v.currentTime, 300, 'does not go past the end');
   t.window.__ytmpMedia('volume', 0.4);
   assert.strictEqual(v.volume, 0.4);
   t.window.__ytmpMedia('volume-by', 0.1);
   assert(Math.abs(v.volume - 0.5) < 1e-9);
   t.window.__ytmpMedia('volume-by', 5);
-  assert.strictEqual(v.volume, 1, 'no pasa de 100 %');
+  assert.strictEqual(v.volume, 1, 'does not go over 100%');
   t.window.__ytmpMedia('mute');
   assert.strictEqual(v.muted, true);
   t.window.__ytmpMedia('volume-by', 0.1);
-  assert.strictEqual(v.muted, false, 'subir el volumen quita el silencio');
+  assert.strictEqual(v.muted, false, 'turning the volume up unmutes');
   t.window.__ytmpMedia('previous');
-  assert.strictEqual(v.currentTime, 0, 'anterior sin lista = volver al inicio');
+  assert.strictEqual(v.currentTime, 0, 'previous without a list = back to the start');
   t.window.__ytmpMedia('borrar-todo');
   t.window.__ytmpMedia('constructor');
 }
 
-// --- Reproductor de YouTube ------------------------------------------------------
+// --- YouTube player ----------------------------------------------------------------
 {
   const log = [];
   let vol = 50, muted = false;
@@ -135,16 +137,16 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   t.window.__ytmpMedia('mute');
   assert.strictEqual(muted, true);
   t.window.__ytmpMedia('volume', 0.8);
-  assert.strictEqual(muted, false, 'fijar volumen quita el silencio');
+  assert.strictEqual(muted, false, 'setting the volume unmutes');
   assert.strictEqual(vol, 80);
 }
 
-// --- Informe del estado ------------------------------------------------------------
+// --- State report ------------------------------------------------------------------
 {
   const v = video({ paused: false, currentTime: 61.7, duration: 200, volume: 0.5 });
   const t = env({ host: 'www.crunchyroll.com', medias: [v] });
   t.mediaSession.metadata = {
-    title: 'Episodio 3', artist: 'Una serie',
+    title: 'Episode 3', artist: 'A series',
     artwork: [
       { src: 'https://img.example/96.jpg', sizes: '96x96' },
       { src: 'https://img.example/512.jpg', sizes: '512x512' },
@@ -154,55 +156,55 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   t.mediaSession.setActionHandler('nexttrack', () => {});
   t.window.__ytmpMediaReport();
   const s = t.states().pop();
-  assert.strictEqual(s.title, 'Episodio 3');
-  assert.strictEqual(s.artist, 'Una serie');
-  assert.strictEqual(s.artwork, 'https://img.example/512.jpg', 'la mayor sin pasar de 640 px');
+  assert.strictEqual(s.title, 'Episode 3');
+  assert.strictEqual(s.artist, 'A series');
+  assert.strictEqual(s.artwork, 'https://img.example/512.jpg', 'the biggest no larger than 640 px');
   assert.strictEqual(s.playing, true);
   assert.strictEqual(s.duration, 200);
   assert.strictEqual(s.volume, 0.5);
   assert.strictEqual(s.canNext, true);
   assert.strictEqual(s.canSeek, true);
 
-  // Sin cambios no se repite; un cambio sí se informa.
+  // Without changes nothing repeats; a change is reported.
   const before = t.states().length;
   t.advance(4100);
-  assert.strictEqual(t.states().length, before, 'sin cambios, sin mensajes');
+  assert.strictEqual(t.states().length, before, 'no changes, no messages');
   v.paused = true;
   t.fire('pause');
   t.advance(200);
   assert.strictEqual(t.states().length, before + 1);
   assert.strictEqual(t.states().pop().playing, false);
 
-  // El avance de la posición solo se informa mientras se observa.
+  // The position moving on is only reported while watched.
   v.paused = false;
   t.fire('play');
   t.advance(200);
   const base = t.states().length;
   v.currentTime = 70; t.advance(2100);
-  assert.strictEqual(t.states().length, base, 'sin observar, la posición no genera mensajes');
+  assert.strictEqual(t.states().length, base, 'unwatched, the position sends no messages');
   t.window.__ytmpMediaWatch(true);
   const watching = t.states().length;
   for (let i = 1; i <= 3; i++) { v.currentTime = 70 + i; t.advance(1000); }
-  assert.strictEqual(t.states().length, watching + 3, 'observando: uno por segundo');
+  assert.strictEqual(t.states().length, watching + 3, 'watched: one per second');
   t.window.__ytmpMediaWatch(false);
   const stopped = t.states().length;
   for (let i = 1; i <= 3; i++) { v.currentTime = 80 + i; t.advance(1000); }
-  assert.strictEqual(t.states().length, stopped, 'al dejar de observar, se detiene');
+  assert.strictEqual(t.states().length, stopped, 'when no longer watched, it stops');
 }
 
-// --- YouTube sin metadatos: título y miniatura de respaldo ---------------------------
+// --- YouTube without metadata: fallback title and thumbnail ----------------------------
 {
   const yt = { getPlayerState: () => 2, getVolume: () => 30, isMuted: () => true, nextVideo() {} };
-  const t = env({ host: 'www.youtube.com', medias: [video()], yt, title: 'Mi canción - YouTube' });
+  const t = env({ host: 'www.youtube.com', medias: [video()], yt, title: 'My song - YouTube' });
   t.window.__ytmpMediaReport();
   const s = t.states().pop();
-  assert.strictEqual(s.title, 'Mi canción');
+  assert.strictEqual(s.title, 'My song');
   assert.strictEqual(s.artwork, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg');
   assert.strictEqual(s.volume, 0.3);
   assert.strictEqual(s.muted, true);
 }
 
-// --- Sin medios, en el menú de inicio y en iframes no hace nada ------------------------
+// --- No media, on the start screen and in iframes it does nothing ----------------------
 {
   const t = env({ medias: [] });
   t.window.__ytmpMediaReport();
@@ -216,4 +218,54 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Págin
   assert.strictEqual(w.__ytmpMedia, undefined);
 }
 
-console.log('media.js: todas las pruebas pasan');
+// --- Watch together: play only, speed, adverts, exact seeks -------------------------
+{
+  const v = video();
+  const t = env({ medias: [v] });
+  t.window.__ytmpMedia('play');
+  assert.strictEqual(v.paused, false);
+  t.window.__ytmpMedia('play');
+  assert.strictEqual(v.plays, 1, '"play" never pauses or restarts');
+  t.window.__ytmpMedia('rate', 1.5);
+  assert.strictEqual(v.playbackRate, 1.5);
+  t.window.__ytmpMedia('rate', 99);
+  assert.strictEqual(v.playbackRate, 4, 'bounded');
+  t.window.__ytmpMedia('seek-to', 61.005);
+  assert.strictEqual(v.currentTime, 61.005, 'to the millisecond');
+  t.window.__ytmpMediaReport();
+  const s = t.states().pop();
+  assert.strictEqual(s.rate, 4);
+  assert.strictEqual(s.ad, false);
+}
+{
+  let rate = 1;
+  const yt = {
+    getPlayerState: () => 2, getVolume: () => 50, isMuted: () => false,
+    playVideo() { this.played = true; }, setPlaybackRate(r) { rate = r; },
+  };
+  const t = env({ host: 'www.youtube.com', medias: [video()], yt, ad: true });
+  t.window.__ytmpMedia('play');
+  assert.ok(yt.played, 'YouTube plays with its own player');
+  t.window.__ytmpMedia('rate', 2);
+  assert.strictEqual(rate, 2);
+  t.window.__ytmpMediaReport();
+  assert.strictEqual(t.states().pop().ad, true, 'an advert is reported');
+}
+{
+  // Netflix: never currentTime; its player's API when it is there.
+  const seeks = [];
+  const player = { seek: (ms) => seeks.push(ms) };
+  const netflix = { appContext: { state: { playerApp: { getAPI: () => ({ videoPlayer: {
+    getAllPlayerSessionIds: () => ['a', 'b'],
+    getVideoPlayerBySessionId: (id) => (id === 'b' ? player : null),
+  } }) } } } };
+  const v = video({ currentTime: 10 });
+  const t = env({ host: 'www.netflix.com', medias: [v], netflix });
+  t.window.__ytmpMedia('seek-to', 125.4);
+  assert.deepStrictEqual(seeks, [125400]);
+  assert.strictEqual(v.currentTime, 10, 'currentTime untouched');
+  const bare = env({ host: 'www.netflix.com', medias: [video({ currentTime: 10 })] });
+  bare.window.__ytmpMedia('seek-to', 50);
+}
+
+console.log('media.js: all tests pass');

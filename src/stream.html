@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="__YTMP_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title></title>
+<style>
+  :root {
+    --deep-twilight: #03045e;
+    --french-blue: #023e8a;
+    --bright-teal-blue: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise-surf: #00b4d8;
+    --sky-aqua: #48cae4;
+    --frosted-blue: #90e0ef;
+    --frosted-blue-2: #ade8f4;
+    --light-cyan: #caf0f8;
+    --alert: #ff9f8a;
+    --tide: linear-gradient(90deg, var(--bright-teal-blue), var(--blue-green), var(--turquoise-surf), var(--sky-aqua), var(--frosted-blue), var(--frosted-blue-2), var(--light-cyan));
+    --glass: rgba(3, 4, 94, .72);
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  body { color: var(--light-cyan); font: 13px/1.4 var(--body); -webkit-font-smoothing: antialiased; user-select: none; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--sky-aqua); outline-offset: 2px; }
+
+  /* The picture fills the window; the layer above it takes the mouse. */
+  .stage { position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(70% 60% at 50% 40%, rgba(2, 62, 138, .55), var(--deep-twilight) 70%, #01022a); }
+  .stage.live { background: #000; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; background: transparent; }
+  .input { position: fixed; inset: 0; outline: none; }
+  .input.control { cursor: default; }
+  body.idle .input:not(.control) { cursor: none; }
+  .stage.dim video { filter: brightness(.35) saturate(.6); transition: filter .3s; }
+
+  /* Chrome that fades while watching. */
+  .chrome { transition: opacity .35s ease, transform .35s ease; }
+  body.idle .chrome { opacity: 0; pointer-events: none; }
+  body.idle .chrome.top { transform: translateY(-6px); }
+  body.idle .chrome.bottom { transform: translate(-50%, 6px); }
+
+  .tide { position: fixed; top: 0; left: 0; right: 0; height: 3px; background: var(--tide); z-index: 3; }
+
+  .top { position: fixed; top: 14px; left: 14px; z-index: 3; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 100px);
+    padding: 6px 14px 6px 6px; border-radius: 22px; background: var(--glass); backdrop-filter: blur(10px);
+    box-shadow: inset 0 0 0 1px rgba(72, 202, 228, .28), 0 8px 24px rgba(0, 0, 0, .35); }
+  .avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font: 600 13px/1 var(--body); color: var(--deep-twilight); background: linear-gradient(135deg, var(--frosted-blue-2), var(--sky-aqua)); }
+  .who { min-width: 0; display: flex; flex-direction: column; }
+  .who .nm { font: 600 13px/1.25 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .who .sub { color: var(--frosted-blue); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .live { display: inline-flex; align-items: center; gap: 5px; color: var(--sky-aqua); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+  .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--turquoise-surf);
+    box-shadow: 0 0 0 3px rgba(0, 180, 216, .25); animation: pulse 1.6s ease-in-out infinite; }
+
+  /* Bottom: a single pill of controls, centred (the app's own side bar
+     lives at the right edge). */
+  .bottom { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3;
+    display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 26px; max-width: calc(100% - 150px);
+    background: var(--glass); backdrop-filter: blur(10px);
+    box-shadow: inset 0 0 0 1px rgba(72, 202, 228, .28), 0 10px 30px rgba(0, 0, 0, .4); }
+  .icon { width: 36px; height: 36px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+    background: transparent; color: var(--frosted-blue-2); flex: none; }
+  .icon:hover { background: rgba(0, 119, 182, .55); color: var(--light-cyan); }
+  .icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .sep { width: 1px; height: 22px; background: rgba(72, 202, 228, .3); margin: 0 4px; flex: none; }
+  .volume { width: 84px; accent-color: var(--turquoise-surf); cursor: pointer; }
+  .pill { height: 36px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--bright-teal-blue); cursor: pointer;
+    background: rgba(2, 62, 138, .5); color: var(--frosted-blue-2); font: 600 12px var(--body); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 7px; }
+  .pill:hover { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  .pill:disabled { opacity: .55; cursor: default; }
+  .pill:disabled:hover { background: rgba(2, 62, 138, .5); color: var(--frosted-blue-2); }
+  .pill.primary { background: linear-gradient(90deg, var(--blue-green), var(--turquoise-surf)); color: var(--deep-twilight); border-color: transparent; }
+  .pill.primary:hover { background: linear-gradient(90deg, var(--turquoise-surf), var(--sky-aqua)); }
+  .pill svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .badge { height: 36px; padding: 0 14px; border-radius: 18px; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+    font: 600 12px var(--body); color: var(--deep-twilight); background: linear-gradient(90deg, var(--sky-aqua), var(--frosted-blue-2)); }
+  .badge svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .leave { color: var(--alert); }
+  .leave:hover { background: rgba(255, 159, 138, .16); color: var(--alert); }
+
+  /* The middle: connecting, waiting, paused, trying again. */
+  /* Between the name at the top and the controls at the bottom. */
+  .center { position: fixed; inset: 0; display: grid; place-items: center; z-index: 2; pointer-events: none; padding: 62px 80px 76px; }
+  .card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; max-width: 360px; pointer-events: auto;
+    padding: 22px 26px; border-radius: 18px; background: linear-gradient(160deg, rgba(0, 119, 182, .45), rgba(2, 62, 138, .55) 60%, rgba(3, 4, 94, .7));
+    box-shadow: inset 0 0 0 1px rgba(72, 202, 228, .35), 0 18px 40px rgba(0, 0, 0, .45); }
+  .card p { margin: 0; font: 600 14px/1.4 var(--display); color: var(--light-cyan); }
+  .card .fine { font: 12px/1.4 var(--body); color: var(--frosted-blue); }
+  .spinner { width: 34px; height: 34px; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent, var(--blue-green), var(--turquoise-surf), var(--light-cyan));
+    -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%); mask: radial-gradient(circle, transparent 58%, #000 60%);
+    animation: spin 1s linear infinite; }
+  .mark { width: 34px; height: 34px; color: var(--sky-aqua); }
+  .mark.warn { color: var(--alert); }
+
+  .sound { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 4; }
+  .hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 4; max-width: calc(100% - 200px);
+    padding: 8px 16px; border-radius: 18px; background: var(--glass); color: var(--light-cyan); font-size: 12px; text-align: center;
+    box-shadow: inset 0 0 0 1px rgba(72, 202, 228, .3); }
+  .hint::after { content: ""; position: absolute; left: 16px; right: 16px; bottom: 0; height: 2px; border-radius: 1px; background: var(--tide); }
+
+  .waves { position: fixed; left: 0; right: 0; bottom: 0; height: clamp(70px, 22vh, 160px); pointer-events: none; z-index: 1; overflow: hidden; }
+  .waves svg { position: absolute; left: 0; bottom: 0; width: 200%; height: 100%; }
+  .waves .w1 { fill: var(--french-blue); opacity: .85; animation: drift 46s linear infinite; }
+  .waves .w2 { fill: var(--bright-teal-blue); opacity: .42; animation: drift 33s linear infinite reverse; }
+  .waves .w3 { fill: var(--blue-green); opacity: .34; animation: drift 25s linear infinite; }
+
+  @keyframes drift { to { transform: translateX(-50%); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) {
+    .waves .w1, .waves .w2, .waves .w3, .live::before { animation: none; }
+    .spinner { animation-duration: 3s; }
+    .chrome { transition: none; }
+  }
+  @media (max-width: 560px) {
+    .volume, .sep.optional { display: none; }
+    .bottom { max-width: calc(100% - 90px); }
+    .pill .label { display: none; }
+    .pill { padding: 0 11px; }
+  }
+  @media (max-width: 360px) { .top .sub { display: none; } .top { max-width: calc(100% - 80px); } }
+  /* The player's smallest size (480×270): everything tighter. */
+  @media (max-height: 360px) {
+    .top { top: 10px; left: 10px; padding: 4px 12px 4px 4px; }
+    .avatar { width: 26px; height: 26px; font-size: 12px; }
+    .bottom { bottom: 10px; padding: 4px; }
+    .icon, .pill, .badge { height: 32px; }
+    .icon { width: 32px; }
+    .center { padding: 50px 70px 56px; }
+    .card { gap: 8px; padding: 12px 18px; border-radius: 14px; }
+    .card p { font-size: 13px; }
+    .spinner, .mark { width: 24px; height: 24px; }
+    .sound { bottom: 58px; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage" id="stage"><video id="video" autoplay playsinline></video></div>
+  <div class="input" id="input" tabindex="-1"></div>
+
+  <div class="tide chrome" aria-hidden="true"></div>
+  <div class="top chrome" id="top">
+    <span class="avatar" id="avatar" aria-hidden="true"></span>
+    <span class="who"><span class="nm" id="title"></span><span class="sub" id="sub"></span></span>
+    <span class="live" id="live" hidden></span>
+  </div>
+
+  <div class="center" id="center">
+    <div class="card" id="card">
+      <div class="spinner" id="spinner" aria-hidden="true"></div>
+      <svg class="mark" id="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" hidden><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5v7M14.5 8.5v7" stroke-linecap="round"/></svg>
+      <p id="message" role="status"></p>
+      <p class="fine" id="fine" hidden></p>
+      <button type="button" class="pill" id="retry" hidden></button>
+    </div>
+  </div>
+
+  <div class="sound" id="sound" hidden>
+    <button type="button" class="pill primary" id="sound-on">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+      <span id="sound-label"></span>
+    </button>
+  </div>
+  <div class="hint" id="hint" role="status" hidden></div>
+
+  <div class="bottom chrome" id="bottom" role="toolbar">
+    <button type="button" class="icon" id="mute"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path id="mute-waves" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/><path id="mute-x" d="M16 9.5l5 5M21 9.5l-5 5" hidden/></svg></button>
+    <input type="range" class="volume" id="volume" min="0" max="100" value="100">
+    <span class="sep optional" aria-hidden="true"></span>
+    <button type="button" class="pill" id="ask" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5l12 7.2-5.2 1.3 3 6-2.3 1.2-3-6L6 17z"/></svg><span class="label" id="ask-label"></span></button>
+    <span class="badge" id="using" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5l12 7.2-5.2 1.3 3 6-2.3 1.2-3-6L6 17z"/></svg><span class="label" id="using-label"></span></span>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" class="icon" id="people"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="17" cy="8" r="2.5"/><path d="M16 13.2c2.4-.3 4.1 1.3 4.6 4.3"/></svg></button>
+    <button type="button" class="icon" id="fullscreen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    <button type="button" class="icon leave" id="leave"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="M10 8l-4 4 4 4M6 12h9"/></svg></button>
+  </div>
+
+  <div class="waves" id="waves" aria-hidden="true">
+    <svg class="w1" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 70C100 40 200 40 300 70C400 100 500 100 600 70C700 40 800 40 900 70C1000 100 1100 100 1200 70V120H0Z"/></svg>
+    <svg class="w2" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 82C100 96 200 96 300 82C400 68 500 68 600 82C700 96 800 96 900 82C1000 68 1100 68 1200 82V120H0Z"/></svg>
+    <svg class="w3" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 98C100 90 200 90 300 98C400 106 500 106 600 98C700 90 800 90 900 98C1000 106 1100 106 1200 98V120H0Z"/></svg>
+  </div>
+
+<script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
+<script>
+// The host's window (Watch together, "Share my window"), in the guest's
+// player. The app (together/, through webview.rs' bridge) hands over the
+// host's connection offer; the picture and sound then come straight from
+// the host's app (WebRTC). If the host lets this guest use the window, its
+// mouse and keyboard go back over the connection's data channel; the host's
+// app decides what reaches the page (remote.rs).
+(() => {
+  'use strict';
+  const data = JSON.parse(document.getElementById('ytmp-data').textContent);
+  const send = (m) => { if (typeof window.__ytmpHomeSend === 'function') window.__ytmpHomeSend(m); };
+  const $ = (id) => document.getElementById(id);
+
+  let I18N = data.i18n || { lang: 'en', strings: {} };
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+
+  const video = $('video');
+  const layer = $('input');
+  const CONNECT_TIMEOUT = 25000;
+  const FIRST_RETRY = 3000;
+
+  // connecting → waiting (connected, no picture yet) → watching; failed.
+  let phase = 'connecting';
+  let state = { host: '', control: false, paused: false, hostAway: false };
+  let pc = null;
+  let dc = null;
+  let connectTimer = 0;
+  let retryTimer = 0;
+  let retryAt = 0;
+  let retryDelay = FIRST_RETRY;
+  let disconnectTimer = 0;
+  let countdown = 0;
+  let asked = 0;
+  let revoked = false;
+  let busyTimer = 0;
+
+  // --- Connection ------------------------------------------------------------------
+  function report(next) {
+    if (next === phase) return;
+    phase = next;
+    send('stream:state:' + (next === 'waiting' ? 'connecting' : next));
+    render();
+  }
+
+  function closePeer() {
+    clearTimeout(disconnectTimer);
+    if (dc) { try { dc.close(); } catch (_) { /* closed */ } }
+    if (pc) { try { pc.close(); } catch (_) { /* closed */ } }
+    pc = null;
+    dc = null;
+  }
+
+  // Asks the host (again) for its window.
+  function ready() {
+    clearTimeout(retryTimer);
+    closePeer();
+    report('connecting');
+    send('stream:ready');
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(fail, CONNECT_TIMEOUT);
+  }
+
+  function fail() {
+    clearTimeout(connectTimer);
+    closePeer();
+    const wait = retryDelay;
+    retryDelay = Math.min(30000, retryDelay * 2);
+    retryAt = Date.now() + wait;
+    report('failed');
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(ready, wait);
+  }
+
+  function gathered(peer, ms) {
+    if (peer.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); peer.removeEventListener('icegatheringstatechange', check); resolve(); };
+      const check = () => { if (peer.iceGatheringState === 'complete') done(); };
+      const timer = setTimeout(done, ms);
+      peer.addEventListener('icegatheringstatechange', check);
+    });
+  }
+
+  async function onOffer(sdp, ice) {
+    closePeer();
+    const peer = new RTCPeerConnection({ iceServers: Array.isArray(ice) ? ice : [], bundlePolicy: 'max-bundle' });
+    pc = peer;
+    peer.ontrack = (e) => {
+      const stream = e.streams[0] || new MediaStream([e.track]);
+      if (video.srcObject !== stream) {
+        video.srcObject = stream;
+        play();
+      }
+    };
+    peer.ondatachannel = (e) => {
+      dc = e.channel;
+      dc.onmessage = (m) => {
+        let message;
+        try { message = JSON.parse(m.data); } catch (_) { return; }
+        if (message.t === 'revoked') { revoked = true; render(); }
+        if (message.t === 'busy') showHint(t('stream.busy', { name: String(message.by || '').slice(0, 24) }));
+      };
+    };
+    peer.onconnectionstatechange = () => {
+      if (pc !== peer) return;
+      const s = peer.connectionState;
+      if (s === 'connected') {
+        clearTimeout(connectTimer);
+        clearTimeout(disconnectTimer);
+        retryDelay = FIRST_RETRY;
+        if (phase !== 'watching') report(video.videoWidth ? 'watching' : 'waiting');
+      } else if (s === 'failed' || s === 'closed') {
+        fail();
+      } else if (s === 'disconnected') {
+        // Often comes back by itself within a few seconds.
+        clearTimeout(disconnectTimer);
+        disconnectTimer = setTimeout(() => { if (pc === peer && peer.connectionState !== 'connected') fail(); }, 6000);
+      }
+    };
+    try {
+      await peer.setRemoteDescription({ type: 'offer', sdp });
+      await peer.setLocalDescription(await peer.createAnswer());
+      await gathered(peer, 3000);
+      if (pc !== peer) return;
+      send('stream:answer:' + peer.localDescription.sdp);
+    } catch (_) {
+      if (pc === peer) fail();
+    }
+  }
+
+  video.addEventListener('resize', () => { if (phase === 'waiting' && video.videoWidth) report('watching'); });
+  video.addEventListener('playing', () => { if (phase === 'waiting' && video.videoWidth) report('watching'); });
+
+  // --- Sound -----------------------------------------------------------------------
+  let volume = 1;
+  try { volume = Math.min(1, Math.max(0, Number(localStorage.getItem('ytmp-stream-volume') ?? 1))); } catch (_) { /* no storage */ }
+
+  async function play() {
+    video.volume = volume;
+    video.muted = false;
+    try {
+      await video.play();
+      $('sound').hidden = true;
+    } catch (_) {
+      // Sound needs a click first: muted meanwhile.
+      video.muted = true;
+      try { await video.play(); } catch (_) { /* waits for a click */ }
+      $('sound').hidden = false;
+    }
+    renderVolume();
+  }
+
+  $('sound-on').addEventListener('click', () => {
+    video.muted = false;
+    video.play().catch(() => {});
+    $('sound').hidden = true;
+    renderVolume();
+  });
+  $('mute').addEventListener('click', () => {
+    video.muted = !video.muted;
+    if (!video.muted) { $('sound').hidden = true; video.play().catch(() => {}); }
+    renderVolume();
+  });
+  $('volume').addEventListener('input', (e) => {
+    volume = Number(e.target.value) / 100;
+    video.volume = volume;
+    if (volume > 0 && video.muted) { video.muted = false; $('sound').hidden = true; }
+    try { localStorage.setItem('ytmp-stream-volume', String(volume)); } catch (_) { /* no storage */ }
+    renderVolume();
+  });
+  function renderVolume() {
+    const silent = video.muted || volume === 0;
+    $('mute-waves').toggleAttribute('hidden', silent);
+    $('mute-x').toggleAttribute('hidden', !silent);
+    $('mute').setAttribute('aria-label', t(silent ? 'stream.unmute' : 'stream.mute'));
+    $('mute').title = t(silent ? 'stream.unmute' : 'stream.mute');
+    $('volume').value = String(Math.round(volume * 100));
+  }
+
+  // --- The other buttons -------------------------------------------------------------
+  $('fullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
+  });
+  document.addEventListener('fullscreenchange', render);
+  $('people').addEventListener('click', () => send('together'));
+  $('leave').addEventListener('click', () => send('stream:leave'));
+  $('retry').addEventListener('click', ready);
+  $('ask').addEventListener('click', () => {
+    asked = Date.now();
+    send('stream:ask');
+    render();
+    setTimeout(render, 15500);
+  });
+
+  // --- Using the host's window ----------------------------------------------------------
+  const canControl = () => state.control && !revoked && phase === 'watching' && !state.paused;
+  function sendInput(message) {
+    if (!canControl() || !dc || dc.readyState !== 'open') return false;
+    try { dc.send(JSON.stringify(message)); return true; } catch (_) { return false; }
+  }
+
+  // Where the picture is (the video keeps its proportions inside the window).
+  function pictureRect() {
+    const r = video.getBoundingClientRect();
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h || !r.width || !r.height) return null;
+    const scale = Math.min(r.width / w, r.height / h);
+    const width = w * scale;
+    const height = h * scale;
+    return { left: r.left + (r.width - width) / 2, top: r.top + (r.height - height) / 2, width, height };
+  }
+  const round = (n) => Math.round(n * 10000) / 10000;
+  function point(e) {
+    const r = pictureRect();
+    if (!r) return null;
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
+    return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x: round(x), y: round(y) } : null;
+  }
+
+  let pressed = null;
+  let moveQueued = null;
+  layer.addEventListener('mousedown', (e) => {
+    if (!canControl() || e.button !== 0) return;
+    const p = point(e);
+    if (!p) return;
+    e.preventDefault();
+    e.stopPropagation();
+    layer.focus({ preventScroll: true });
+    if (sendInput({ t: 'm', e: 'down', x: p.x, y: p.y, c: Math.min(3, e.detail || 1), s: e.shiftKey })) pressed = p;
+  }, true);
+  window.addEventListener('mouseup', (e) => {
+    if (!pressed || e.button !== 0) return;
+    const p = point(e) || pressed;
+    pressed = null;
+    sendInput({ t: 'm', e: 'up', x: p.x, y: p.y, c: Math.min(3, e.detail || 1), s: e.shiftKey });
+  }, true);
+  window.addEventListener('mousemove', (e) => {
+    wake();
+    if (!canControl()) return;
+    const p = point(e);
+    if (!p) return;
+    if (pressed) pressed = p;
+    // At most one per frame.
+    if (moveQueued) { moveQueued = p; return; }
+    moveQueued = p;
+    requestAnimationFrame(() => {
+      const q = moveQueued;
+      moveQueued = null;
+      if (q) sendInput({ t: 'm', e: 'move', x: q.x, y: q.y });
+    });
+  }, { passive: true });
+  layer.addEventListener('wheel', (e) => {
+    if (!canControl()) return;
+    const p = point(e);
+    if (!p) return;
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+    sendInput({ t: 'm', e: 'wheel', x: p.x, y: p.y, dx: Math.round(e.deltaX * unit), dy: Math.round(e.deltaY * unit) });
+  }, { passive: false });
+  layer.addEventListener('contextmenu', (e) => { if (state.control) e.preventDefault(); });
+
+  // Keys go to the host's page unless they are shortcuts (Ctrl, Alt, the
+  // Windows key, F keys): those stay here. AltGr characters do go.
+  function forwardKey(e, kind) {
+    if (!canControl() || e.isComposing) return;
+    if (document.activeElement && document.activeElement.closest && document.activeElement.closest('.bottom, .sound, .card')) return;
+    const altgr = e.ctrlKey && e.altKey && !e.metaKey && e.key.length === 1;
+    if (((e.ctrlKey || e.altKey) && !altgr) || e.metaKey) return;
+    if (/^F\d+$/.test(e.key) || e.key === 'Unidentified' || e.key === 'Dead') return;
+    // Modifiers travel with each key (Shift) or not at all.
+    if (['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'ScrollLock'].includes(e.key)) return;
+    if (e.key === 'Escape' && document.fullscreenElement) return;
+    if (sendInput({ t: 'k', e: kind, key: e.key, code: e.code, kc: e.keyCode, s: e.shiftKey, c: e.ctrlKey, a: e.altKey, m: e.metaKey, r: e.repeat })) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }
+  window.addEventListener('keydown', (e) => forwardKey(e, 'down'), true);
+  window.addEventListener('keyup', (e) => forwardKey(e, 'up'), true);
+  window.addEventListener('blur', () => {
+    if (pressed) {
+      sendInput({ t: 'm', e: 'up', x: pressed.x, y: pressed.y, c: 1 });
+      pressed = null;
+    }
+  });
+
+  // --- Chrome that hides while watching -------------------------------------------------
+  let idleTimer = 0;
+  function wake() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      const hovering = document.querySelector('.bottom:hover, .top:hover');
+      if (phase === 'watching' && !hovering) document.body.classList.add('idle');
+    }, 2600);
+  }
+
+  let hintTimer = 0;
+  function showHint(text) {
+    const hint = $('hint');
+    hint.textContent = text;
+    hint.hidden = false;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { hint.hidden = true; }, 3000);
+  }
+
+  // --- Drawing ---------------------------------------------------------------------
+  function tickRetry() {
+    const seconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+    $('message').textContent = t('stream.failed', { name: state.host, seconds });
+  }
+
+  function render() {
+    const host = state.host || '';
+    document.title = t('stream.title', { name: host });
+    $('avatar').textContent = (Array.from(host.trim())[0] || '?').toUpperCase();
+    $('title').textContent = t('stream.title', { name: host });
+    const watching = phase === 'watching' && !state.paused && !state.hostAway;
+    $('live').hidden = !watching;
+    $('live').textContent = t('stream.live');
+    $('stage').classList.toggle('live', phase === 'watching');
+    $('stage').classList.toggle('dim', phase === 'watching' && (state.paused || state.hostAway));
+    $('waves').hidden = phase === 'watching';
+
+    const control = state.control && !revoked;
+    $('sub').textContent = control ? t('stream.using_hint', { name: host }) : '';
+    $('sub').hidden = !control;
+    $('using').hidden = !control;
+    $('using-label').textContent = t('stream.using');
+    const ask = $('ask');
+    ask.hidden = control;
+    const waiting = Date.now() - asked < 15000;
+    ask.disabled = waiting;
+    $('ask-label').textContent = t(waiting ? 'stream.asked' : 'stream.ask');
+    ask.title = t(waiting ? 'stream.asked' : 'stream.ask');
+    layer.classList.toggle('control', control);
+    // While using the window, a press on the picture is for the host's page,
+    // not for moving this window.
+    layer.toggleAttribute('data-ytmp-nodrag', control);
+
+    for (const [id, key] of [['people', 'stream.people'], ['leave', 'stream.leave'], ['fullscreen', document.fullscreenElement ? 'stream.exit_fullscreen' : 'stream.fullscreen']]) {
+      $(id).title = t(key);
+      $(id).setAttribute('aria-label', t(key));
+    }
+    $('volume').setAttribute('aria-label', t('stream.volume'));
+    $('sound-label').textContent = t('stream.sound_on');
+    $('retry').textContent = t('stream.retry');
+    renderVolume();
+
+    // The middle card.
+    clearInterval(countdown);
+    let message = '';
+    let spin = false;
+    let pause = false;
+    const fine = $('fine');
+    fine.hidden = true;
+    if (state.hostAway) { message = t('stream.host_away', { name: host }); spin = true; }
+    else if (state.paused) { message = t('stream.paused', { name: host }); pause = true; }
+    else if (phase === 'connecting') { message = t('stream.connecting', { name: host }); spin = true; }
+    else if (phase === 'waiting') { message = t('stream.waiting'); spin = true; }
+    else if (phase === 'failed') {
+      tickRetry();
+      countdown = setInterval(tickRetry, 1000);
+      fine.textContent = t('stream.failed_hint');
+      fine.hidden = false;
+    }
+    $('center').hidden = !message && phase !== 'failed';
+    if (message) $('message').textContent = message;
+    $('spinner').hidden = !spin;
+    $('mark').toggleAttribute('hidden', !pause);
+    $('retry').hidden = phase !== 'failed';
+    if (phase !== 'watching') document.body.classList.remove('idle');
+  }
+
+  // --- From the app -------------------------------------------------------------------
+  window.addEventListener('ytmp:stream', (e) => {
+    const message = typeof e.detail === 'string' ? (() => { try { return JSON.parse(e.detail); } catch (_) { return null; } })() : e.detail;
+    if (!message || typeof message !== 'object') return;
+    if (message.t === 'state') {
+      const hadControl = state.control;
+      state = {
+        host: String(message.host || '').slice(0, 24),
+        control: !!message.control,
+        paused: !!message.paused,
+        hostAway: !!message.hostAway,
+      };
+      if (state.control && !hadControl) revoked = false;
+      render();
+    } else if (message.t === 'offer' && typeof message.sdp === 'string') {
+      onOffer(message.sdp, message.ice);
+    }
+  });
+  // A language change: the app sends this page's strings again.
+  window.addEventListener('ytmp:locale', (e) => {
+    if (e.detail && e.detail.strings) {
+      I18N = { lang: e.detail.lang || I18N.lang, strings: e.detail.strings };
+      render();
+    }
+  });
+
+  // --- Numbers for the diary ------------------------------------------------------------
+  // Every 10 s while connected: what arrives (frames per second, size,
+  // drops and freezes, jitter, decoder), the sound (and whether it is
+  // waiting for a click), the round trip and the kind of route. The app
+  // writes them in its diary (session.log), never addresses.
+  const STATS_EVERY = 10000;
+  let lastStats = null;
+
+  async function stats() {
+    const peer = pc;
+    if (!peer || peer.connectionState !== 'connected') return null;
+    let report;
+    try { report = await peer.getStats(); } catch (_) { return null; }
+    const at = performance.now();
+    const byId = new Map();
+    report.forEach((s) => byId.set(s.id, s));
+    const out = { muted: video.muted, paused: video.paused };
+    const totals = { video: 0, audio: 0, dropped: 0, freezes: 0, concealed: 0, samples: 0 };
+    let pair = null;
+    report.forEach((s) => {
+      if (s.type === 'inbound-rtp' && s.kind === 'video') {
+        if (s.framesPerSecond !== undefined) out.fps = s.framesPerSecond;
+        if (s.frameWidth) { out.w = s.frameWidth; out.h = s.frameHeight; }
+        if (s.jitter !== undefined) out.jitter = s.jitter * 1000;
+        if (s.decoderImplementation) out.dec = s.decoderImplementation;
+        totals.video += s.bytesReceived || 0;
+        totals.dropped += s.framesDropped || 0;
+        totals.freezes += s.freezeCount || 0;
+      } else if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+        totals.audio += s.bytesReceived || 0;
+        totals.concealed += s.concealedSamples || 0;
+        totals.samples += s.totalSamplesReceived || 0;
+        if (s.audioLevel !== undefined) out.level = s.audioLevel;
+      } else if (s.type === 'transport' && s.selectedCandidatePairId) {
+        pair = s.selectedCandidatePairId;
+      }
+    });
+    const chosen = pair && byId.get(pair);
+    if (chosen) {
+      if (chosen.currentRoundTripTime !== undefined) out.rtt = chosen.currentRoundTripTime * 1000;
+      const local = byId.get(chosen.localCandidateId);
+      const remote = byId.get(chosen.remoteCandidateId);
+      if (local && remote) out.route = local.candidateType + '-' + remote.candidateType;
+    }
+    if (lastStats && lastStats.peer === peer) {
+      const seconds = (at - lastStats.at) / 1000;
+      if (seconds > 0) {
+        out.kbps = Math.max(0, (totals.video - lastStats.video) * 8 / 1000 / seconds);
+        out.audioKbps = Math.max(0, (totals.audio - lastStats.audio) * 8 / 1000 / seconds);
+      }
+      out.dropped = Math.max(0, totals.dropped - lastStats.dropped);
+      out.freezes = Math.max(0, totals.freezes - lastStats.freezes);
+      const samples = totals.samples - lastStats.samples;
+      if (samples > 0) out.concealed = Math.max(0, (totals.concealed - lastStats.concealed) / samples * 100);
+    }
+    lastStats = Object.assign({ peer, at }, totals);
+    send('stream:stats:' + JSON.stringify(out));
+    return out;
+  }
+  setInterval(stats, STATS_EVERY);
+  // The tests ask for them at once.
+  Object.defineProperty(window, '__ytmpStreamStats', { value: stats });
+
+  render();
+  wake();
+  ready();
+})();
+</script>
+</body>
+</html>

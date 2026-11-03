@@ -1,32 +1,31 @@
-//! Bóveda: cifrado en disco de los datos propios de la app.
+//! Vault: on-disk encryption of the app's own data.
 //!
-//! Esquema de *cifrado de sobre* (envelope encryption), el mismo que usan
-//! Chrome/Edge para cookies y contraseñas ("os_crypt"), Electron
-//! (`safeStorage`) o Signal Desktop:
+//! An *envelope encryption* scheme, the same Chrome/Edge use for cookies
+//! and passwords ("os_crypt"), Electron (`safeStorage`) or Signal Desktop:
 //!
-//! - Una **clave de datos** de 256 bits, aleatoria (generador del sistema),
-//!   cifra cada archivo con **AES-256-GCM** (cifrado autenticado: cualquier
-//!   cambio en el archivo se detecta y se rechaza).
-//! - Esa clave nunca se guarda en claro: se guarda envuelta por **DPAPI**
-//!   (`CryptProtectData`), que la ata a la cuenta de Windows del usuario.
-//!   Otro usuario del equipo, o el disco montado en otra máquina, no puede
-//!   descifrarla.
-//! - Cada archivo lleva su propio *nonce* aleatorio de 96 bits y, como datos
-//!   asociados, su propósito (`settings`, `window`...): un archivo cifrado
-//!   no se puede hacer pasar por otro.
-//! - La clave vive en memoria en un búfer que se borra al soltarlo
+//! - A random 256-bit **data key** (system generator) encrypts each file
+//!   with **AES-256-GCM** (authenticated encryption: any change to the file
+//!   is detected and rejected).
+//! - That key is never stored in the clear: it is stored wrapped by
+//!   **DPAPI** (`CryptProtectData`), which binds it to the user's Windows
+//!   account. Another user of the PC, or the disk mounted on another
+//!   machine, cannot decrypt it.
+//! - Each file carries its own random 96-bit *nonce* and, as associated
+//!   data, its purpose (`settings`, `window`...): one encrypted file cannot
+//!   pass for another.
+//! - The key lives in memory in a buffer that is wiped when dropped
 //!   (`zeroize`).
-//! - **Atada al equipo** cuando hay chip de seguridad (TPM 2.0, el que
-//!   exige Windows 11): antes de DPAPI, la clave se cifra con una clave RSA
-//!   que crea el propio TPM (proveedor "Microsoft Platform Crypto Provider")
-//!   y que nunca sale de él. Así, aunque alguien copie el disco y conozca la
-//!   contraseña de Windows, en otro equipo no puede abrir la bóveda. Es lo
-//!   que hace Windows Hello con sus claves. Sin avisos ni diálogos. Sin TPM,
-//!   se queda solo DPAPI.
+//! - **Bound to the PC** when there is a security chip (TPM 2.0, which
+//!   Windows 11 requires): before DPAPI, the key is encrypted with an RSA
+//!   key the TPM itself creates (the "Microsoft Platform Crypto Provider")
+//!   and that never leaves it. So even someone who copies the disk and knows
+//!   the Windows password cannot open the vault on another PC. It is what
+//!   Windows Hello does with its keys. No prompts or dialogs. Without a TPM,
+//!   only DPAPI remains.
 //!
-//! Formato de un archivo cifrado: `YTV1` | nonce (12) | texto cifrado + tag (16).
-//! Formato de `vault.key`: `YTK1` | DPAPI(clave), o
-//! `YTK2` | DPAPI(variante (1) | RSA-OAEP del TPM(clave)).
+//! Encrypted file format: `YTV1` | nonce (12) | ciphertext + tag (16).
+//! `vault.key` format: `YTK1` | DPAPI(key), or
+//! `YTK2` | DPAPI(variant (1) | TPM RSA-OAEP(key)).
 
 use std::{fs, io, path::Path};
 #[cfg(test)]
@@ -44,26 +43,26 @@ const DATA_MAGIC: &[u8; 4] = b"YTV1";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
-/// Ningún archivo de la app se acerca a esto (la biblioteca de música más
-/// grande ronda unos pocos MB); más grande = corrupto.
+/// No file of the app comes near this (the biggest music library is a few
+/// MB); bigger = corrupt.
 const MAX_FILE: u64 = 64 * 1024 * 1024;
 
-/// Quien envuelve la clave de datos (DPAPI en Windows).
+/// What wraps the data key (DPAPI on Windows).
 pub trait Protector {
     fn protect(&self, secret: &[u8]) -> io::Result<Vec<u8>>;
     fn unprotect(&self, blob: &[u8]) -> io::Result<Zeroizing<Vec<u8>>>;
 }
 
-/// Qué pasó al abrir la bóveda.
+/// What happened when opening the vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opened {
-    /// Se usó la clave existente.
+    /// The existing key was used.
     Existing,
-    /// No había clave: se creó una nueva.
+    /// There was no key: a new one was created.
     Created,
-    /// La clave existente no se pudo desenvolver (perfil de Windows
-    /// restablecido, carpeta copiada de otro usuario o equipo): se creó una
-    /// nueva y lo cifrado antes ya no se puede leer.
+    /// The existing key could not be unwrapped (Windows profile reset,
+    /// folder copied from another user or PC): a new one was created and
+    /// what was encrypted before can no longer be read.
     Replaced,
 }
 
@@ -71,16 +70,16 @@ pub struct Vault {
     key: Zeroizing<[u8; KEY_LEN]>,
 }
 
-/// Quién protege la clave guardada en `vault.key`.
+/// What protects the key stored in `vault.key`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyProtection {
-    /// La cuenta de Windows (DPAPI).
+    /// The Windows account (DPAPI).
     Account,
-    /// El chip de seguridad del equipo (TPM) y la cuenta de Windows.
+    /// The PC's security chip (TPM) and the Windows account.
     DeviceAndAccount,
 }
 
-/// Lee de qué tipo es `vault.key` (sin descifrar nada).
+/// Reads what kind of `vault.key` it is (without decrypting anything).
 pub fn key_protection(key_path: &Path) -> Option<KeyProtection> {
     let bytes = read_bounded(key_path).ok()??;
     if bytes.starts_with(KEY_MAGIC_HARDWARE) {
@@ -92,7 +91,7 @@ pub fn key_protection(key_path: &Path) -> Option<KeyProtection> {
     }
 }
 
-/// Envuelve con `hardware` y luego con `account`.
+/// Wraps with `hardware` and then with `account`.
 fn wrap_layered(secret: &[u8], account: &dyn Protector, hardware: &dyn Protector) -> io::Result<Vec<u8>> {
     let inner = Zeroizing::new(hardware.protect(secret)?);
     account.protect(&inner)
@@ -107,15 +106,15 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
 
-/// Bytes aleatorios del generador criptográfico del sistema.
+/// Random bytes from the system's cryptographic generator.
 pub fn random_bytes<const N: usize>() -> io::Result<[u8; N]> {
     let mut out = [0u8; N];
     getrandom::fill(&mut out).map_err(|e| io::Error::other(e.to_string()))?;
     Ok(out)
 }
 
-/// Escritura atómica: archivo temporal + rename, para no dejar un archivo a
-/// medias si el proceso muere a mitad de la escritura.
+/// Atomic write: temporary file + rename, so no half-written file is left
+/// if the process dies in the middle of writing.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
@@ -124,7 +123,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_FILE => Err(invalid("archivo demasiado grande")),
+        Ok(meta) if meta.len() > MAX_FILE => Err(invalid("file too large")),
         Ok(_) => fs::read(path).map(Some),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
@@ -132,25 +131,26 @@ fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
 }
 
 impl Vault {
-    /// Abre la bóveda de `key_path` o crea una clave nueva (protegida por la
-    /// cuenta; `upgrade` la pasa después al TPM). Sin TPM: para las pruebas.
+    /// Opens the vault of `key_path` or creates a new key (protected by the
+    /// account; `upgrade` moves it to the TPM later). Without a TPM: for
+    /// the tests.
     #[cfg(test)]
     pub fn open(key_path: &Path, protector: &dyn Protector) -> io::Result<(Self, Opened)> {
         Self::open_with(key_path, protector, None)
     }
 
-    /// Igual, sabiendo abrir también claves atadas al TPM (`hardware`).
+    /// The same, also able to open keys bound to the TPM (`hardware`).
     pub fn open_with(key_path: &Path, protector: &dyn Protector, hardware: Option<&dyn Protector>) -> io::Result<(Self, Opened)> {
         if let Some(bytes) = read_bounded(key_path)? {
             let unwrapped = if let Some(blob) = bytes.strip_prefix(KEY_MAGIC_HARDWARE.as_slice()) {
                 match hardware {
                     Some(hardware) => unwrap_layered(blob, protector, hardware),
-                    None => Err(invalid("la clave está atada a un TPM que no está disponible")),
+                    None => Err(invalid("the key is bound to a TPM that is not available")),
                 }
             } else {
                 bytes
                     .strip_prefix(KEY_MAGIC.as_slice())
-                    .ok_or_else(|| invalid("vault.key con formato desconocido"))
+                    .ok_or_else(|| invalid("vault.key has an unknown format"))
                     .and_then(|blob| protector.unprotect(blob))
             };
             if let Ok(secret) = unwrapped {
@@ -174,11 +174,11 @@ impl Vault {
         Ok(Self { key })
     }
 
-    /// Ata la clave (la misma: los archivos cifrados siguen valiendo) al
-    /// TPM además de a la cuenta. Antes de reemplazar `vault.key` comprueba
-    /// que se puede desenvolver de vuelta: si el TPM falla en algo, todo
-    /// queda como estaba. Lento la primera vez (el TPM genera la clave RSA):
-    /// llamar desde un hilo aparte.
+    /// Binds the key (the same one: encrypted files stay valid) to the TPM
+    /// as well as to the account. Before replacing `vault.key` it checks the
+    /// key unwraps back: if the TPM fails at anything, everything stays as
+    /// it was. Slow the first time (the TPM generates the RSA key): call
+    /// from a separate thread.
     pub fn upgrade(&self, key_path: &Path, account: &dyn Protector, hardware: &dyn Protector) -> io::Result<()> {
         if key_protection(key_path) == Some(KeyProtection::DeviceAndAccount) {
             return Ok(());
@@ -186,7 +186,7 @@ impl Vault {
         let blob = wrap_layered(self.key.as_slice(), account, hardware)?;
         let back = unwrap_layered(&blob, account, hardware)?;
         if back.as_slice() != self.key.as_slice() {
-            return Err(invalid("el TPM no devolvió la misma clave"));
+            return Err(invalid("the TPM did not return the same key"));
         }
         let mut file = KEY_MAGIC_HARDWARE.to_vec();
         file.extend(blob);
@@ -194,21 +194,21 @@ impl Vault {
     }
 
     fn cipher(&self) -> Aes256Gcm {
-        Aes256Gcm::new_from_slice(self.key.as_slice()).expect("clave de 32 bytes")
+        Aes256Gcm::new_from_slice(self.key.as_slice()).expect("a 32-byte key")
     }
 
     fn aad(purpose: &str) -> Vec<u8> {
         [DATA_MAGIC.as_slice(), b"/", purpose.as_bytes()].concat()
     }
 
-    /// Cifra `plaintext` para el propósito dado.
+    /// Encrypts `plaintext` for the given purpose.
     pub fn seal(&self, purpose: &str, plaintext: &[u8]) -> io::Result<Vec<u8>> {
         let nonce = random_bytes::<NONCE_LEN>()?;
         let aad = Self::aad(purpose);
         let ciphertext = self
             .cipher()
             .encrypt(Nonce::from_slice(&nonce), Payload { msg: plaintext, aad: &aad })
-            .map_err(|_| io::Error::other("no se pudo cifrar"))?;
+            .map_err(|_| io::Error::other("could not encrypt"))?;
         let mut out = Vec::with_capacity(4 + NONCE_LEN + ciphertext.len());
         out.extend_from_slice(DATA_MAGIC);
         out.extend_from_slice(&nonce);
@@ -216,33 +216,33 @@ impl Vault {
         Ok(out)
     }
 
-    /// Descifra y verifica. Falla si el archivo se modificó, es de otro
-    /// propósito o se cifró con otra clave.
+    /// Decrypts and verifies. Fails if the file was modified, belongs to
+    /// another purpose or was encrypted with another key.
     pub fn unseal(&self, purpose: &str, data: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
-        let body = data.strip_prefix(DATA_MAGIC.as_slice()).ok_or_else(|| invalid("no es un archivo de la bóveda"))?;
+        let body = data.strip_prefix(DATA_MAGIC.as_slice()).ok_or_else(|| invalid("not a vault file"))?;
         if body.len() < NONCE_LEN + TAG_LEN {
-            return Err(invalid("archivo de la bóveda truncado"));
+            return Err(invalid("truncated vault file"));
         }
         let (nonce, ciphertext) = body.split_at(NONCE_LEN);
         let aad = Self::aad(purpose);
         self.cipher()
             .decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: &aad })
             .map(Zeroizing::new)
-            .map_err(|_| invalid("el archivo no pasó la verificación (modificado o de otra clave)"))
+            .map_err(|_| invalid("the file failed verification (modified or from another key)"))
     }
 
     pub fn write(&self, path: &Path, purpose: &str, plaintext: &[u8]) -> io::Result<()> {
         write_atomic(path, &self.seal(purpose, plaintext)?)
     }
 
-    /// `Ok(None)` si el archivo no existe.
+    /// `Ok(None)` if the file does not exist.
     pub fn read(&self, path: &Path, purpose: &str) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
         read_bounded(path)?.map(|data| self.unseal(purpose, &data)).transpose()
     }
 }
 
-/// El protector del sistema: DPAPI en Windows. Fuera de Windows (solo para
-/// compilar y probar) no hay equivalente y la clave queda sin envolver.
+/// The system protector: DPAPI on Windows. Outside Windows (only to build
+/// and test) there is no equivalent and the key stays unwrapped.
 pub fn system_protector() -> Box<dyn Protector> {
     #[cfg(windows)]
     {
@@ -263,7 +263,7 @@ pub fn system_protector() -> Box<dyn Protector> {
     }
 }
 
-/// El chip de seguridad (TPM) si el equipo tiene uno utilizable.
+/// The security chip (TPM) if the PC has a usable one.
 pub fn hardware_protector() -> Option<Box<dyn Protector>> {
     #[cfg(windows)]
     {
@@ -275,9 +275,9 @@ pub fn hardware_protector() -> Option<Box<dyn Protector>> {
     }
 }
 
-/// Clave RSA-2048 creada dentro del TPM con el proveedor de Windows
-/// ("Microsoft Platform Crypto Provider"): no exportable, solo para
-/// descifrar, sin PIN ni diálogos (`NCRYPT_SILENT_FLAG`).
+/// An RSA-2048 key created inside the TPM with the Windows provider
+/// ("Microsoft Platform Crypto Provider"): not exportable, decryption only,
+/// no PIN or dialogs (`NCRYPT_SILENT_FLAG`).
 #[cfg(windows)]
 mod tpm {
     use std::{io, ptr::null_mut};
@@ -296,12 +296,12 @@ mod tpm {
     use super::Protector;
 
     const KEY_NAME: PCWSTR = windows_sys::core::w!("YT Mini Player vault key v1");
-    /// Relleno OAEP con SHA-256 (1) o, si el TPM no lo admite, SHA-1 (2).
+    /// OAEP padding with SHA-256 (1) or, if the TPM does not support it, SHA-1 (2).
     const VARIANTS: [(u8, PCWSTR); 2] = [(1, BCRYPT_SHA256_ALGORITHM), (2, BCRYPT_SHA1_ALGORITHM)];
 
     pub struct Tpm;
 
-    /// Libera el objeto de NCrypt al salir del ámbito.
+    /// Frees the NCrypt object when it goes out of scope.
     struct Handle(usize);
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -315,19 +315,19 @@ mod tpm {
         if status == 0 {
             Ok(())
         } else {
-            Err(io::Error::other(format!("TPM: {what} falló ({:#010x})", status as u32)))
+            Err(io::Error::other(format!("TPM: {what} failed ({:#010x})", status as u32)))
         }
     }
 
     fn provider() -> io::Result<Handle> {
         let mut handle = 0usize;
-        check(unsafe { NCryptOpenStorageProvider(&mut handle, MS_PLATFORM_CRYPTO_PROVIDER, 0) }, "abrir el proveedor")?;
+        check(unsafe { NCryptOpenStorageProvider(&mut handle, MS_PLATFORM_CRYPTO_PROVIDER, 0) }, "opening the provider")?;
         Ok(Handle(handle))
     }
 
     fn open_key(provider: &Handle) -> io::Result<Handle> {
         let mut key = 0usize;
-        check(unsafe { NCryptOpenKey(provider.0, &mut key, KEY_NAME, 0, NCRYPT_SILENT_FLAG) }, "abrir la clave")?;
+        check(unsafe { NCryptOpenKey(provider.0, &mut key, KEY_NAME, 0, NCRYPT_SILENT_FLAG) }, "opening the key")?;
         Ok(Handle(key))
     }
 
@@ -335,17 +335,17 @@ mod tpm {
         let mut key = 0usize;
         check(
             unsafe { NCryptCreatePersistedKey(provider.0, &mut key, BCRYPT_RSA_ALGORITHM, KEY_NAME, 0, 0) },
-            "crear la clave",
+            "creating the key",
         )?;
         let key = Handle(key);
         let length = 2048u32.to_le_bytes();
         let usage = NCRYPT_ALLOW_DECRYPT_FLAG.to_le_bytes();
         unsafe {
-            // Tamaño y uso: si el TPM no admite fijarlos, valen los de
-            // fábrica (RSA-2048); lo que importa se comprueba al cifrar.
+            // Size and usage: if the TPM does not allow setting them, the
+            // defaults (RSA-2048) apply; what matters is checked on encrypt.
             NCryptSetProperty(key.0, NCRYPT_LENGTH_PROPERTY, length.as_ptr(), 4, NCRYPT_SILENT_FLAG);
             NCryptSetProperty(key.0, NCRYPT_KEY_USAGE_PROPERTY, usage.as_ptr(), 4, NCRYPT_SILENT_FLAG);
-            check(NCryptFinalizeKey(key.0, NCRYPT_SILENT_FLAG), "generar la clave")?;
+            check(NCryptFinalizeKey(key.0, NCRYPT_SILENT_FLAG), "generating the key")?;
         }
         Ok(key)
     }
@@ -360,9 +360,9 @@ mod tpm {
         let flags = NCRYPT_PAD_OAEP_FLAG | NCRYPT_SILENT_FLAG;
         let mut size = 0u32;
         unsafe {
-            check(NCryptEncrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, null_mut(), 0, &mut size, flags), "cifrar")?;
+            check(NCryptEncrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, null_mut(), 0, &mut size, flags), "encrypting")?;
             let mut out = vec![0u8; size as usize];
-            check(NCryptEncrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, out.as_mut_ptr(), size, &mut size, flags), "cifrar")?;
+            check(NCryptEncrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, out.as_mut_ptr(), size, &mut size, flags), "encrypting")?;
             out.truncate(size as usize);
             Ok(out)
         }
@@ -374,16 +374,16 @@ mod tpm {
         let flags = NCRYPT_PAD_OAEP_FLAG | NCRYPT_SILENT_FLAG;
         let mut size = 0u32;
         unsafe {
-            check(NCryptDecrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, null_mut(), 0, &mut size, flags), "descifrar")?;
+            check(NCryptDecrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, null_mut(), 0, &mut size, flags), "decrypting")?;
             let mut out = Zeroizing::new(vec![0u8; size as usize]);
-            check(NCryptDecrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, out.as_mut_ptr(), size, &mut size, flags), "descifrar")?;
+            check(NCryptDecrypt(key.0, data.as_ptr(), data.len() as u32, pad_ptr, out.as_mut_ptr(), size, &mut size, flags), "decrypting")?;
             out.truncate(size as usize);
             Ok(out)
         }
     }
 
     impl Tpm {
-        /// ¿Hay TPM y el proveedor de Windows responde?
+        /// Is there a TPM and does the Windows provider answer?
         pub fn available() -> bool {
             provider().is_ok()
         }
@@ -407,16 +407,16 @@ mod tpm {
                     Err(err) => last = Some(err),
                 }
             }
-            Err(last.unwrap_or_else(|| io::Error::other("TPM: sin relleno admitido")))
+            Err(last.unwrap_or_else(|| io::Error::other("TPM: no supported padding")))
         }
 
         fn unprotect(&self, blob: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
-            let (&variant, ciphertext) = blob.split_first().ok_or_else(|| io::Error::other("TPM: blob vacío"))?;
+            let (&variant, ciphertext) = blob.split_first().ok_or_else(|| io::Error::other("TPM: empty blob"))?;
             let hash = VARIANTS
                 .iter()
                 .find(|(v, _)| *v == variant)
                 .map(|(_, h)| *h)
-                .ok_or_else(|| io::Error::other("TPM: variante desconocida"))?;
+                .ok_or_else(|| io::Error::other("TPM: unknown variant"))?;
             let provider = provider()?;
             let key = open_key(&provider)?;
             decrypt(&key, hash, ciphertext)
@@ -424,14 +424,14 @@ mod tpm {
     }
 }
 
-/// DPAPI de Windows: la clave queda atada a la cuenta del usuario.
+/// Windows DPAPI: the key is bound to the user's account.
 #[cfg(windows)]
 pub struct Dpapi;
 
 #[cfg(windows)]
 impl Dpapi {
-    /// Entropía adicional: otra app del mismo usuario que llame a DPAPI sin
-    /// conocerla no desenvuelve la clave con una llamada genérica.
+    /// Extra entropy: another app of the same user calling DPAPI without
+    /// knowing it cannot unwrap the key with a generic call.
     const ENTROPY: &'static [u8] = b"YtMiniPlayer/vault/v1";
 
     fn blob(bytes: &[u8]) -> windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB {
@@ -503,7 +503,7 @@ impl Protector for Dpapi {
 pub mod tests {
     use super::*;
 
-    /// Sustituto de DPAPI para las pruebas (no es seguro: solo invierte bytes).
+    /// DPAPI stand-in for the tests (not secure: it only flips bytes).
     pub struct TestProtector(pub u8);
 
     impl Protector for TestProtector {
@@ -530,24 +530,24 @@ pub mod tests {
         assert_eq!(how, Opened::Created);
         let raw = fs::read(&key).unwrap();
         assert!(raw.starts_with(b"YTK1"));
-        assert!(!raw.windows(KEY_LEN).any(|w| w == a.key.as_slice()), "la clave no se guarda en claro");
+        assert!(!raw.windows(KEY_LEN).any(|w| w == a.key.as_slice()), "the key is not stored in the clear");
 
-        let sealed = a.seal("settings", b"hola").unwrap();
+        let sealed = a.seal("settings", b"hello").unwrap();
         let (b, how) = Vault::open(&key, &TestProtector(0x5a)).unwrap();
         assert_eq!(how, Opened::Existing);
-        assert_eq!(b.unseal("settings", &sealed).unwrap().as_slice(), b"hola");
+        assert_eq!(b.unseal("settings", &sealed).unwrap().as_slice(), b"hello");
 
-        // Otro "usuario": la clave no se desenvuelve bien → se reemplaza.
-        fs::write(&key, b"YTK1corto").unwrap();
+        // Another "user": the key does not unwrap properly → it is replaced.
+        fs::write(&key, b"YTK1short").unwrap();
         let (c, how) = Vault::open(&key, &TestProtector(0x5a)).unwrap();
         assert_eq!(how, Opened::Replaced);
-        assert!(c.unseal("settings", &sealed).is_err(), "lo de la clave vieja ya no se lee");
+        assert!(c.unseal("settings", &sealed).is_err(), "what the old key encrypted can no longer be read");
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// "TPM" de pruebas: otra transformación reversible, con un byte de
-    /// variante como el de verdad. Como un TPM real, el de otro equipo no
-    /// descifra lo que cifró este (falla en vez de devolver basura).
+    /// Test "TPM": another reversible transformation, with a variant byte
+    /// like the real one. Like a real TPM, another PC's cannot decrypt what
+    /// this one encrypted (it fails instead of returning garbage).
     struct FakeTpm(u8);
     impl Protector for FakeTpm {
         fn protect(&self, secret: &[u8]) -> io::Result<Vec<u8>> {
@@ -556,12 +556,12 @@ pub mod tests {
         fn unprotect(&self, blob: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
             match blob {
                 [1, device, rest @ ..] if *device == self.0 => Ok(Zeroizing::new(rest.iter().map(|b| b.wrapping_sub(self.0)).collect())),
-                _ => Err(invalid("no es de este TPM")),
+                _ => Err(invalid("not from this TPM")),
             }
         }
     }
 
-    /// Un TPM que cifra pero no devuelve lo mismo (o falla al descifrar).
+    /// A TPM that encrypts but does not give the same back (or fails to decrypt).
     struct BrokenTpm;
     impl Protector for BrokenTpm {
         fn protect(&self, secret: &[u8]) -> io::Result<Vec<u8>> {
@@ -579,10 +579,10 @@ pub mod tests {
         let account = TestProtector(0x33);
         let (vault, how) = Vault::open_with(&key, &account, Some(&FakeTpm(9))).unwrap();
         assert_eq!(how, Opened::Created);
-        assert_eq!(key_protection(&key), Some(KeyProtection::Account), "se crea con la cuenta; el TPM va después");
-        let sealed = vault.seal("settings", b"ajustes").unwrap();
+        assert_eq!(key_protection(&key), Some(KeyProtection::Account), "created with the account; the TPM comes later");
+        let sealed = vault.seal("settings", b"settings").unwrap();
 
-        // Un TPM defectuoso: no se toca nada.
+        // A faulty TPM: nothing is touched.
         assert!(vault.upgrade(&key, &account, &BrokenTpm).is_err());
         assert_eq!(key_protection(&key), Some(KeyProtection::Account));
 
@@ -591,18 +591,18 @@ pub mod tests {
         assert!(fs::read(&key).unwrap().starts_with(b"YTK2"));
         vault.upgrade(&key, &account, &FakeTpm(9)).unwrap();
 
-        // Con el TPM: misma clave, los archivos de antes se leen.
+        // With the TPM: the same key, earlier files can be read.
         let (again, how) = Vault::open_with(&key, &account, Some(&FakeTpm(9))).unwrap();
         assert_eq!(how, Opened::Existing);
-        assert_eq!(again.unseal("settings", &sealed).unwrap().as_slice(), b"ajustes");
+        assert_eq!(again.unseal("settings", &sealed).unwrap().as_slice(), b"settings");
 
-        // En "otro equipo" (sin ese TPM) o sin TPM: no se abre; empieza de cero.
+        // On "another PC" (without that TPM) or without a TPM: it does not open; it starts fresh.
         let (_, how) = Vault::open_with(&key, &account, Some(&FakeTpm(10))).unwrap();
         assert_eq!(how, Opened::Replaced);
         fs::write(&key, [b"YTK2".as_slice(), &account.protect(&FakeTpm(9).protect(&[7u8; KEY_LEN]).unwrap()).unwrap()].concat()).unwrap();
         let (_, how) = Vault::open(&key, &account).unwrap();
-        assert_eq!(how, Opened::Replaced, "sin TPM disponible no se puede abrir una clave atada a él");
-        assert_eq!(key_protection(&dir.join("no-existe")), None);
+        assert_eq!(how, Opened::Replaced, "without the TPM a key bound to it cannot be opened");
+        assert_eq!(key_protection(&dir.join("does-not-exist")), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -612,18 +612,18 @@ pub mod tests {
         let (vault, _) = Vault::open(&dir.join("vault.key"), &TestProtector(1)).unwrap();
         let secret = br#"{"pin_hash":"$argon2id$..."}"#;
         let sealed = vault.seal("settings", secret).unwrap();
-        assert!(!sealed.windows(8).any(|w| w == b"argon2id"), "no queda texto en claro");
+        assert!(!sealed.windows(8).any(|w| w == b"argon2id"), "no plain text is left");
         assert_eq!(sealed.len(), 4 + NONCE_LEN + secret.len() + TAG_LEN);
-        assert_ne!(vault.seal("settings", secret).unwrap(), sealed, "nonce distinto en cada escritura");
+        assert_ne!(vault.seal("settings", secret).unwrap(), sealed, "a different nonce on every write");
 
         for i in [4, 4 + NONCE_LEN, sealed.len() - 1] {
             let mut bad = sealed.clone();
             bad[i] ^= 1;
-            assert!(vault.unseal("settings", &bad).is_err(), "byte {i} modificado");
+            assert!(vault.unseal("settings", &bad).is_err(), "byte {i} modified");
         }
-        assert!(vault.unseal("window", &sealed).is_err(), "no se puede hacer pasar por otro archivo");
+        assert!(vault.unseal("window", &sealed).is_err(), "it cannot pass for another file");
         assert!(vault.unseal("settings", &sealed[..20]).is_err());
-        assert!(vault.unseal("settings", b"{\"plano\":1}").is_err());
+        assert!(vault.unseal("settings", b"{\"plain\":1}").is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -633,8 +633,8 @@ pub mod tests {
         let (vault, _) = Vault::open(&dir.join("vault.key"), &TestProtector(7)).unwrap();
         let path = dir.join("settings.enc");
         assert!(vault.read(&path, "settings").unwrap().is_none());
-        vault.write(&path, "settings", b"datos").unwrap();
-        assert_eq!(vault.read(&path, "settings").unwrap().unwrap().as_slice(), b"datos");
+        vault.write(&path, "settings", b"data").unwrap();
+        assert_eq!(vault.read(&path, "settings").unwrap().unwrap().as_slice(), b"data");
         assert!(!dir.join("settings.tmp").exists());
         fs::write(&path, vec![0u8; (MAX_FILE + 1) as usize]).unwrap();
         assert!(vault.read(&path, "settings").is_err());

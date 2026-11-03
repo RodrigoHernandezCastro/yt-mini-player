@@ -1,9 +1,9 @@
-//! Reglas de seguridad del navegador embebido (lógica pura, probada).
+//! Security rules of the embedded browser (pure logic, tested).
 //!
-//! - Qué navegaciones se permiten (esquemas, http solo en la red local,
-//!   modo de superposición máxima limitado al catálogo).
-//! - Qué hacer con las ventanas nuevas (`window.open`, `target=_blank`).
-//! - Autenticación de los mensajes IPC con el token de sesión.
+//! - Which navigations are allowed (schemes, http only on the local
+//!   network, maximum overlay mode limited to the catalog).
+//! - What to do with new windows (`window.open`, `target=_blank`).
+//! - Authenticating IPC messages with the session token.
 
 use std::net::IpAddr;
 
@@ -11,8 +11,8 @@ use url::{Host, Url};
 
 use crate::services::{self, HOME_HOST};
 
-/// Proveedores de identidad que los servicios del catálogo usan para iniciar
-/// sesión. Se permiten también en superposición máxima y como ventana nueva.
+/// Identity providers the catalog services use to sign in. Also allowed in
+/// maximum overlay mode and as new windows.
 const IDENTITY_DOMAINS: &[&str] = &[
     "accounts.google.com",
     "accounts.youtube.com",
@@ -27,17 +27,17 @@ const IDENTITY_DOMAINS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Navigation {
     Allow,
-    /// Se bloquea esta y se navega a la versión https.
+    /// This one is blocked and the https version is opened instead.
     Upgrade(String),
-    /// Se bloquea; el texto explica por qué (para el aviso).
+    /// Blocked; the i18n key of the reason (for the notice).
     Block(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewWindow {
-    /// Se abre en la propia ventana (servicios e inicio de sesión).
+    /// Opens in the window itself (services and signing in).
     SameWindow(String),
-    /// Se abre en el navegador predeterminado.
+    /// Opens in the default browser.
     External(String),
     Deny,
 }
@@ -46,7 +46,7 @@ fn host_in(host: &str, domains: &[&str]) -> bool {
     domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
-/// Dominio del catálogo o de inicio de sesión (o nuestra pantalla de inicio).
+/// A catalog or sign-in domain (or our start screen).
 pub fn is_trusted_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     host == HOME_HOST
@@ -54,8 +54,8 @@ pub fn is_trusted_host(host: &str) -> bool {
         || services::SERVICES.iter().any(|s| host_in(&host, s.domains))
 }
 
-/// `localhost`, `*.local` o una IP privada/de enlace: servidores caseros
-/// (Plex, Jellyfin) que no suelen tener https.
+/// `localhost`, `*.local` or a private/link-local IP: home servers (Plex,
+/// Jellyfin) that usually have no https.
 fn is_local(url: &Url) -> bool {
     match url.host() {
         Some(Host::Domain(d)) => {
@@ -71,18 +71,18 @@ fn is_local(url: &Url) -> bool {
     }
 }
 
-/// ¿Se permite navegar la ventana principal a `url`?
+/// May the main window navigate to `url`?
 ///
-/// `overlay`: superposición máxima (UIAccess). Ese proceso puede enviar
-/// teclas y clics a ventanas de administrador, así que solo abre el
-/// catálogo y sus inicios de sesión.
+/// `overlay`: maximum overlay (UIAccess). That process can send keys and
+/// clicks to administrator windows, so it only opens the catalog and its
+/// sign-in pages.
 pub fn navigation(url: &str, overlay: bool, extension_ids: &[String]) -> Navigation {
-    let Ok(parsed) = Url::parse(url) else { return Navigation::Block("dirección no válida") };
+    let Ok(parsed) = Url::parse(url) else { return Navigation::Block("blocked.invalid_address") };
     match parsed.scheme() {
         "https" => {
             let host = parsed.host_str().unwrap_or_default();
             if overlay && !is_trusted_host(host) {
-                Navigation::Block("en superposición máxima solo se abren los servicios del menú")
+                Navigation::Block("blocked.overlay")
             } else {
                 Navigation::Allow
             }
@@ -104,14 +104,14 @@ pub fn navigation(url: &str, overlay: bool, extension_ids: &[String]) -> Navigat
             if !overlay && extension_ids.iter().any(|e| e == id) {
                 Navigation::Allow
             } else {
-                Navigation::Block("página de una extensión no instalada")
+                Navigation::Block("blocked.extension")
             }
         }
-        _ => Navigation::Block("tipo de enlace bloqueado (solo páginas web)"),
+        _ => Navigation::Block("blocked.scheme"),
     }
 }
 
-/// ¿Qué hacer con una ventana nueva que pide la página?
+/// What to do with a new window the page asks for?
 pub fn new_window(url: &str, overlay: bool) -> NewWindow {
     let Ok(parsed) = Url::parse(url) else { return NewWindow::Deny };
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -132,8 +132,8 @@ pub fn new_window(url: &str, overlay: bool) -> NewWindow {
     }
 }
 
-/// Comparación en tiempo constante (no revela por tiempos cuántos
-/// caracteres del token acertó quien prueba).
+/// Constant-time comparison (timing does not reveal how many characters of
+/// the token a guesser got right).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -141,14 +141,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Mensaje IPC autenticado: `<token>|<mensaje>`. Devuelve el mensaje si el
-/// token es el de esta sesión.
+/// Authenticated IPC message: `<token>|<message>`. Returns the message if
+/// the token is this session's.
 pub fn authenticate<'a>(body: &'a str, token: &str) -> Option<&'a str> {
     let (given, message) = body.split_once('|')?;
     constant_time_eq(given.as_bytes(), token.as_bytes()).then_some(message)
 }
 
-/// Token de sesión en hexadecimal (128 bits del generador del sistema).
+/// Session token in hex (128 bits from the system's generator).
 pub fn new_token() -> std::io::Result<String> {
     let bytes = crate::vault::random_bytes::<16>()?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
@@ -162,7 +162,7 @@ mod tests {
     fn https_is_allowed_and_other_schemes_are_not() {
         assert_eq!(navigation("https://www.youtube.com/watch?v=x", false, &[]), Navigation::Allow);
         assert_eq!(navigation("https://ytmp.localhost/", false, &[]), Navigation::Allow);
-        assert_eq!(navigation("https://cualquier-sitio.example/", false, &[]), Navigation::Allow);
+        assert_eq!(navigation("https://any-site.example/", false, &[]), Navigation::Allow);
         assert_eq!(navigation("about:blank", false, &[]), Navigation::Allow);
         for bad in [
             "file:///C:/Windows/win.ini",
@@ -175,7 +175,7 @@ mod tests {
             "chrome://settings",
             "blob:https://x.com/123",
             "about:settings",
-            "no es una url",
+            "not a url",
         ] {
             assert!(matches!(navigation(bad, false, &[]), Navigation::Block(_)), "{bad}");
         }
@@ -197,7 +197,7 @@ mod tests {
         ] {
             assert_eq!(navigation(local, false, &[]), Navigation::Allow, "{local}");
         }
-        // 172.32 ya no es privada.
+        // 172.32 is no longer private.
         assert!(matches!(navigation("http://172.32.0.1/", false, &[]), Navigation::Upgrade(_)));
     }
 
@@ -232,8 +232,8 @@ mod tests {
     fn new_windows() {
         assert_eq!(new_window("https://accounts.google.com/o/oauth2", false), NewWindow::SameWindow("https://accounts.google.com/o/oauth2".into()));
         assert_eq!(new_window("http://www.youtube.com/watch?v=x", false), NewWindow::SameWindow("https://www.youtube.com/watch?v=x".into()));
-        assert_eq!(new_window("https://tienda.example/oferta", false), NewWindow::External("https://tienda.example/oferta".into()));
-        assert_eq!(new_window("https://tienda.example/oferta", true), NewWindow::Deny);
+        assert_eq!(new_window("https://shop.example/offer", false), NewWindow::External("https://shop.example/offer".into()));
+        assert_eq!(new_window("https://shop.example/offer", true), NewWindow::Deny);
         for bad in ["javascript:alert(1)", "file:///C:/x", "ms-settings:", "about:blank", "x"] {
             assert_eq!(new_window(bad, false), NewWindow::Deny, "{bad}");
         }
@@ -251,3 +251,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/policy_cases.rs"]
+mod cases;

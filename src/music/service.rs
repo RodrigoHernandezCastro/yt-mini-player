@@ -1,6 +1,10 @@
-//! Servicio de música: un hilo dueño de la biblioteca que atiende a la
-//! página "Mi música", lanza el trabajo pesado en hilos aparte (importar,
-//! buscar, descargar, analizar duplicados, licencias) y guarda todo cifrado.
+//! Music service: a thread that owns the library, serves the "My music"
+//! page, runs the heavy work on separate threads (importing, searching,
+//! downloading, analysing duplicates, licenses) and saves everything
+//! encrypted.
+//!
+//! Texts for the page go as [`Message`]s (a key and its arguments): the page
+//! renders them in its current language, so they follow a language change.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -26,6 +30,7 @@ use super::{
 };
 use crate::{
     config::Store,
+    i18n::Message,
     license::{self, LicenseError, LicenseRecord, Plan, StoreConfig},
     net::Http,
 };
@@ -36,18 +41,18 @@ const LICENSE: &str = "music-license";
 const SAVE_EVERY: Duration = Duration::from_secs(2);
 const MAX_JOBS_SHOWN: usize = 300;
 const MAX_ITEMS_CACHED: usize = 30;
-/// Canciones por tanda al importar (para que la página vaya viendo).
+/// Songs per batch when importing (so the page sees progress).
 const SCAN_BATCH: usize = 150;
 pub const DOWNLOADS_FOLDER: &str = "YT Mini Player";
 
 // ---------------------------------------------------------------------------
-// Órdenes de la página
+// Requests from the page
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     Ready,
-    /// Elegir carpeta: lo hace la app (diálogo del sistema) y luego `Import`.
+    /// Pick a folder: the app does it (system dialog) and then `Import`.
     PickFolder,
     Import(PathBuf),
     Rescan,
@@ -112,8 +117,8 @@ fn is_playlist_id(id: &str) -> bool {
 }
 
 impl Request {
-    /// Mensaje de la página (sin el prefijo `music:`). Lista cerrada y
-    /// validada: nombres, ids y tamaños acotados.
+    /// A message from the page (without the `music:` prefix). A closed,
+    /// validated list: bounded names, ids and sizes.
     pub fn parse(message: &str) -> Option<Self> {
         let (head, arg) = match message.split_once(':') {
             Some((h, a)) => (h, Some(a)),
@@ -189,7 +194,7 @@ impl Request {
 }
 
 // ---------------------------------------------------------------------------
-// Avisos a la página
+// Messages to the page
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -252,7 +257,8 @@ pub struct JobView {
     pub state: &'static str,
     pub received: u64,
     pub size: u64,
-    pub message: String,
+    /// Why it was skipped or failed.
+    pub message: Option<Message>,
     pub track_id: Option<String>,
 }
 
@@ -260,7 +266,7 @@ pub struct JobView {
 #[serde(rename_all = "camelCase")]
 struct ExistingView<'a> {
     reason: Existing,
-    text: &'static str,
+    message: Message,
     track_id: &'a str,
 }
 
@@ -280,7 +286,7 @@ struct PlanView {
     configured: bool,
     dev: bool,
     entitlements: Option<license::Entitlements>,
-    /// Playlists que hay ahora (para "2 de 5").
+    /// Playlists there are now (for "2 of 5").
     playlists: usize,
     email: String,
     key: String,
@@ -289,7 +295,7 @@ struct PlanView {
     expires_at: Option<String>,
     validated_at: u64,
     busy: bool,
-    message: Option<String>,
+    message: Option<Message>,
     error: bool,
     can_buy_downloads: bool,
     can_buy_lifetime: bool,
@@ -297,13 +303,13 @@ struct PlanView {
 }
 
 // ---------------------------------------------------------------------------
-// Servicio
+// Service
 // ---------------------------------------------------------------------------
 
 pub struct Config {
     /// `%LOCALAPPDATA%\yt_mini_player\music`
     pub dir: PathBuf,
-    /// Carpeta de las descargas (`Música\YT Mini Player`).
+    /// Downloads folder (`Music\YT Mini Player`).
     pub downloads: Option<PathBuf>,
     pub store: Store,
     pub archive: String,
@@ -317,8 +323,8 @@ enum Msg {
     ScanBatch(Vec<Track>),
     ScanProgress { done: usize, total: usize },
     ScanDone { roots: Vec<PathBuf>, present: HashSet<String>, failed: usize },
-    Searched { query: String, page: u32, result: Result<(u64, Vec<Hit>), String> },
-    ItemLoaded { id: String, result: Result<Item, String> },
+    Searched { query: String, page: u32, result: Result<(u64, Vec<Hit>), Message> },
+    ItemLoaded { id: String, result: Result<Item, Message> },
     ItemCover { item: String, cover: String },
     Download(Progress),
     DupesProgress { done: usize, total: usize },
@@ -343,7 +349,7 @@ impl Handle {
         let _ = self.tx.send(Msg::Request(request));
     }
 
-    /// Guarda y para (espera como mucho `wait`).
+    /// Saves and stops (waits at most `wait`).
     pub fn shutdown(&self, wait: Duration) {
         let (ack, done) = mpsc::channel();
         if self.tx.send(Msg::Shutdown(ack)).is_ok() {
@@ -352,8 +358,8 @@ impl Handle {
     }
 }
 
-/// Lo que espera una descarga para terminar: a qué playlist (y en qué
-/// posición) va y de qué álbum viene.
+/// What a download waits for to finish: which playlist (and position) it
+/// goes to and which album it comes from.
 struct PendingJob {
     item: String,
     remote: RemoteTrack,
@@ -371,11 +377,11 @@ struct Service {
     fingerprints: HashMap<String, String>,
     license: Option<LicenseRecord>,
     license_busy: bool,
-    license_message: Option<(String, bool)>,
+    license_message: Option<(Message, bool)>,
     downloader: Option<Downloader>,
     jobs: BTreeMap<u64, JobView>,
     pending: HashMap<u64, PendingJob>,
-    /// Playlists en construcción: id → posiciones (álbum en orden).
+    /// Playlists being built: id → slots (album order).
     slots: HashMap<String, Vec<Option<String>>>,
     next_job: u64,
     items: Vec<Item>,
@@ -389,9 +395,9 @@ struct Service {
     jobs_dirty: bool,
     last_save: Instant,
     last_jobs_emit: Instant,
-    /// Última revisión de la licencia (None = aún ninguna). Nunca se resta
-    /// tiempo a `Instant::now()`: en Windows cuenta desde el arranque del
-    /// equipo y restar más de lo que lleva encendido abortaría la app.
+    /// Last license check (None = none yet). Time is never subtracted from
+    /// `Instant::now()`: on Windows it counts from boot and subtracting more
+    /// than the uptime would abort the app.
     last_license_check: Option<Instant>,
     ready_once: bool,
 }
@@ -401,14 +407,14 @@ fn now() -> u64 {
 }
 
 pub fn start(cfg: Config, emit: impl Fn(String) + Send + 'static) -> Handle {
-    // La clave de las canciones existe antes de que la página la pida.
+    // The songs' key exists before the page asks for it.
     #[cfg(not(test))]
     if let Ok(key) = crate::policy::new_token() {
         serve::init(key, cfg.dir.join("covers"));
     }
     let (tx, rx) = mpsc::channel();
     let handle = Handle { tx: tx.clone() };
-    let _ = thread::Builder::new().name("musica".into()).spawn(move || {
+    let _ = thread::Builder::new().name("music".into()).spawn(move || {
         let service = Service::new(cfg, tx, Box::new(emit));
         service.run(rx);
     });
@@ -503,7 +509,7 @@ impl Service {
         }
         if self.library_dirty {
             if let Err(err) = self.cfg.store.save(&self.cfg.dir.join("library.enc"), LIBRARY, &self.library) {
-                eprintln!("no se pudo guardar la biblioteca: {err}");
+                eprintln!("could not save the library: {err}");
             }
             self.library_dirty = false;
         }
@@ -520,24 +526,22 @@ impl Service {
         }
     }
 
-    fn toast(&self, text: &str) {
-        self.send(serde_json::json!({ "type": "toast", "text": text }));
+    /// A short notice: one or more sentences, shown together.
+    fn toast(&self, messages: Vec<Message>) {
+        self.send(serde_json::json!({ "type": "toast", "messages": messages }));
     }
 
-    /// Un límite del plan: la página lo explica en línea, sin ventanas.
-    fn notice(&self, feature: &str, text: &str) {
-        self.send(serde_json::json!({ "type": "notice", "feature": feature, "text": text }));
+    /// A plan limit: the page explains it inline, without windows.
+    fn notice(&self, feature: &str, messages: Vec<Message>) {
+        self.send(serde_json::json!({ "type": "notice", "feature": feature, "messages": messages }));
     }
 
-    fn playlist_limit_text(&self) -> String {
+    fn playlist_limit(&self) -> Message {
         let plan = self.plan();
         let max = plan.entitlements().max_playlists.unwrap_or(0);
         match plan {
-            Plan::Free => format!(
-                "Tienes {max} playlists, el máximo del plan Gratis. Con Descargas puedes tener {}; con De por vida, sin límite.",
-                license::DOWNLOADS_PLAYLISTS
-            ),
-            _ => format!("Tienes {max} playlists, el máximo de tu plan. Con De por vida no hay límite."),
+            Plan::Free => msg!("music.limit.playlists_free", count = max, next = license::DOWNLOADS_PLAYLISTS),
+            _ => msg!("music.limit.playlists_paid", count = max),
         }
     }
 
@@ -584,7 +588,7 @@ impl Service {
         match &self.license {
             Some(record) => {
                 if let Err(err) = self.cfg.store.save(&path, LICENSE, record) {
-                    eprintln!("no se pudo guardar la licencia: {err}");
+                    eprintln!("could not save the license: {err}");
                 }
             }
             None => {
@@ -595,7 +599,7 @@ impl Service {
 
     fn license_job(&mut self, action: LicenseAction, work: impl FnOnce(&Http, &str, &StoreConfig) -> Result<Option<LicenseRecord>, LicenseError> + Send + 'static) {
         let (Some(http), Some(shop)) = (self.http.clone(), self.cfg.shop.clone()) else {
-            self.license_message = Some(("Esta compilación no tiene la tienda configurada.".into(), true));
+            self.license_message = Some((msg!("music.license.no_store"), true));
             self.emit_plan();
             return;
         };
@@ -626,8 +630,8 @@ impl Service {
                 let plan = record.plan;
                 self.license = Some(record);
                 self.save_license();
-                let name = if plan == Plan::Lifetime { "De por vida" } else { "Descargas" };
-                self.license_message = Some((format!("¡Listo! Plan {name} activado en este equipo."), false));
+                let message = if plan == Plan::Lifetime { msg!("music.license.activated_lifetime") } else { msg!("music.license.activated_downloads") };
+                self.license_message = Some((message, false));
             }
             (LicenseAction::Validate, Ok(Some(record))) => {
                 self.license = Some(record);
@@ -637,10 +641,10 @@ impl Service {
             (LicenseAction::Deactivate, Ok(_)) => {
                 self.license = None;
                 self.save_license();
-                self.license_message = Some(("Licencia desactivada en este equipo.".into(), false));
+                self.license_message = Some((msg!("music.license.deactivated"), false));
             }
             (LicenseAction::Validate, Err(LicenseError::Rejected(message))) => {
-                // Ya no vale: se conserva la clave para reactivar, sin plan.
+                // No longer valid: the key is kept for reactivating, without a plan.
                 if let Some(record) = &mut self.license {
                     record.status = "invalid".into();
                 }
@@ -650,11 +654,10 @@ impl Service {
             (LicenseAction::Validate, Err(LicenseError::Offline(_))) => {
                 let days = self.license.as_ref().map_or(0, |r| now().saturating_sub(r.validated_at) / 86_400);
                 if days >= 1 {
-                    self.license_message =
-                        Some((format!("Sin conexión con la tienda desde hace {days} día(s); se usa la última validación."), true));
+                    self.license_message = Some((msg!("music.license.offline_days", count = days), true));
                 }
             }
-            (_, Err(err)) => self.license_message = Some((err.to_string(), true)),
+            (_, Err(err)) => self.license_message = Some((err.message(), true)),
             (_, Ok(None)) => {}
         }
         self.emit_plan();
@@ -716,15 +719,11 @@ impl Service {
                 self.library.remove(&missing);
                 self.scanning = None;
                 let added = std::mem::take(&mut self.scan_added);
-                let mut message = match added {
-                    0 => "Biblioteca al día.".to_owned(),
-                    1 => "1 canción nueva.".to_owned(),
-                    n => format!("{n} canciones nuevas."),
-                };
+                let mut messages = vec![if added == 0 { msg!("music.scan.up_to_date") } else { msg!("music.scan.new", count = added) }];
                 if failed > 0 {
-                    message.push_str(&format!(" {failed} archivo(s) no se pudieron leer."));
+                    messages.push(msg!("music.scan.unreadable", count = failed));
                 }
-                self.send(serde_json::json!({ "type": "scan", "running": false, "added": added, "removed": missing.len(), "message": message }));
+                self.send(serde_json::json!({ "type": "scan", "running": false, "added": added, "removed": missing.len(), "messages": messages }));
                 self.library_changed();
                 if !self.scan_queue.is_empty() {
                     let roots = std::mem::take(&mut self.scan_queue);
@@ -788,8 +787,8 @@ impl Service {
                 self.emit_jobs();
                 if !self.ready_once {
                     self.ready_once = true;
-                    // Al abrir: revisar las carpetas (archivos nuevos o borrados)
-                    // y validar la licencia si toca.
+                    // On opening: check the folders (new or deleted files) and
+                    // validate the license if it is time.
                     let roots = self.library.folders.clone();
                     if !roots.is_empty() {
                         self.start_scan(roots);
@@ -799,13 +798,13 @@ impl Service {
                     }
                 }
             }
-            // La app la convierte en Import tras el diálogo.
+            // The app turns it into Import after the dialog.
             Request::PickFolder => {}
             Request::Import(path) => self.import(path),
             Request::Rescan => {
                 let roots = self.library.folders.clone();
                 if roots.is_empty() {
-                    self.toast("Primero añade una carpeta con tu música.");
+                    self.toast(vec![msg!("music.toast.add_folder_first")]);
                 } else {
                     self.start_scan(roots);
                 }
@@ -822,7 +821,7 @@ impl Service {
                         .map(|t| t.id.clone())
                         .collect();
                     self.library.remove(&ids);
-                    self.toast("Carpeta quitada de la biblioteca (los archivos siguen en su sitio).");
+                    self.toast(vec![msg!("music.toast.folder_removed")]);
                     self.library_changed();
                 }
             }
@@ -838,7 +837,7 @@ impl Service {
             Request::Cancel(id) => {
                 if let Some(d) = &self.downloader {
                     for removed in d.cancel(id) {
-                        self.finish_job(removed, "cancelled", "Cancelada".into(), None);
+                        self.finish_job(removed, "cancelled", None, None);
                     }
                 }
             }
@@ -847,11 +846,11 @@ impl Service {
                 self.emit_jobs();
             }
             Request::SavePlaylist { id, name, tracks } => {
-                // Editar una que ya existe siempre se puede (aunque haya más
-                // de las del plan); crear una nueva, dentro del límite.
+                // Editing an existing one is always allowed (even with more than
+                // the plan allows); creating a new one, within the limit.
                 let exists = id.as_deref().is_some_and(|id| self.library.playlists.iter().any(|p| p.id == id));
                 if !exists && !self.plan().entitlements().can_add_playlist(self.library.playlists.len()) {
-                    self.notice("playlists", &self.playlist_limit_text());
+                    self.notice("playlists", vec![self.playlist_limit()]);
                     return;
                 }
                 let tracks: Vec<String> = tracks.into_iter().filter(|t| self.library.track(t).is_some()).collect();
@@ -898,11 +897,11 @@ impl Service {
             }
             Request::Activate(key) => {
                 if !license::plausible_key(&key) {
-                    self.license_message = Some(("Esa clave no tiene el formato de una licencia.".into(), true));
+                    self.license_message = Some((msg!("music.license.bad_format"), true));
                     self.emit_plan();
                     return;
                 }
-                // Si había otra activada en este equipo, se libera antes.
+                // If another one was activated on this PC, it is released first.
                 let previous = self.license.clone().filter(|r| !r.key.is_empty() && r.key != key && !r.instance_id.is_empty());
                 self.license_job(LicenseAction::Activate, move |http, api, shop| {
                     if let Some(previous) = &previous {
@@ -914,7 +913,7 @@ impl Service {
             Request::Deactivate => {
                 let Some(record) = self.license.clone() else { return };
                 self.license_job(LicenseAction::Deactivate, move |http, api, _| match license::deactivate(http, api, &record) {
-                    // Si la tienda ya no la conoce, igualmente se olvida aquí.
+                    // If the store no longer knows it, it is forgotten here anyway.
                     Ok(()) | Err(LicenseError::Rejected(_)) => Ok(None),
                     Err(err) => Err(err),
                 });
@@ -931,12 +930,9 @@ impl Service {
                 match url {
                     Some(url) => {
                         crate::security::open_in_browser(&url);
-                        self.license_message = Some((
-                            "Se abrió la página de pago en tu navegador. Al terminar recibirás la clave por correo: pégala aquí.".into(),
-                            false,
-                        ));
+                        self.license_message = Some((msg!("music.license.checkout_opened"), false));
                     }
-                    None => self.license_message = Some(("Esta compilación no tiene la tienda configurada.".into(), true)),
+                    None => self.license_message = Some((msg!("music.license.no_store"), true)),
                 }
                 self.emit_plan();
             }
@@ -948,7 +944,7 @@ impl Service {
             Request::SetQuality(quality) => {
                 if self.library.quality != quality {
                     self.library.quality = quality;
-                    // Los álbumes abiertos cambian de formato preferido.
+                    // Open albums change their preferred format.
                     self.items.clear();
                     self.library_changed();
                 }
@@ -956,17 +952,17 @@ impl Service {
         }
     }
 
-    // -- Importar ---------------------------------------------------------------
+    // -- Import ---------------------------------------------------------------
 
     fn import(&mut self, path: PathBuf) {
         if !path.is_dir() {
-            self.toast("Esa carpeta no existe.");
+            self.toast(vec![msg!("music.toast.folder_missing")]);
             return;
         }
         if self.library.folders.iter().any(|f| path.starts_with(f)) {
-            self.toast("Esa carpeta ya está en la biblioteca; se revisa de nuevo.");
+            self.toast(vec![msg!("music.toast.folder_known")]);
         } else {
-            // Si la nueva contiene alguna de las anteriores, la reemplaza.
+            // If the new one contains any of the previous ones, it replaces them.
             self.library.folders.retain(|f| !f.starts_with(&path));
             self.library.folders.push(path.clone());
             self.library_dirty = true;
@@ -1036,12 +1032,12 @@ impl Service {
         if trash {
             let existing: Vec<PathBuf> = paths.iter().filter(|p| p.exists()).cloned().collect();
             if !os::to_recycle_bin(&existing) {
-                self.toast("No se pudieron mover a la Papelera (¿están en uso?).");
+                self.toast(vec![msg!("music.toast.trash_failed")]);
                 return;
             }
             let n = ids.len();
             self.library.remove(&ids);
-            self.toast(&if n == 1 { "Enviada a la Papelera.".to_owned() } else { format!("{n} canciones enviadas a la Papelera.") });
+            self.toast(vec![msg!("music.toast.trashed", count = n)]);
         } else {
             self.library.remove(&ids);
         }
@@ -1052,13 +1048,13 @@ impl Service {
 
     fn search(&mut self, query: String, page: u32, popular: bool) {
         let Some(http) = self.http.clone() else {
-            self.send(serde_json::json!({ "type": "search", "query": query, "page": page, "error": "Sin conexión segura disponible." }));
+            self.send(serde_json::json!({ "type": "search", "query": query, "page": page, "error": msg!("music.no_secure_connection") }));
             return;
         };
         let Some(url) = archive::search_url(&self.cfg.archive, &query, page, popular) else { return };
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let result = http.get_json::<serde_json::Value>(&url).map(|json| archive::parse_search(&json)).map_err(|e| e.to_string());
+            let result = http.get_json::<serde_json::Value>(&url).map(|json| archive::parse_search(&json)).map_err(|e| e.message());
             let _ = tx.send(Msg::Searched { query, page, result });
         });
     }
@@ -1071,7 +1067,7 @@ impl Service {
         thread::spawn(move || {
             let result = http
                 .get_json::<serde_json::Value>(&url)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.message())
                 .and_then(|json| archive::parse_item(&json, best));
             let _ = tx.send(Msg::ItemLoaded { id, result });
         });
@@ -1096,7 +1092,7 @@ impl Service {
                 };
                 let existing = self.library.find_existing(&candidate).map(|(reason, track)| ExistingView {
                     reason,
-                    text: reason.describe(),
+                    message: reason.message(),
                     track_id: &track.id,
                 });
                 RemoteView { track: t, existing, queued: self.queued(&item.id, &t.file) }
@@ -1106,8 +1102,8 @@ impl Service {
             "type": "item",
             "id": item.id,
             "item": {
-                "id": item.id, "title": item.title, "creator": item.creator, "license": item.license_label,
-                "licenseTerms": item.license_terms, "licenseUrl": item.license_url,
+                "id": item.id, "title": item.title, "creator": item.creator, "license": item.license,
+                "licenseLabel": item.license_label, "licenseUrl": item.license_url,
                 "details": archive::details_url(&item.id),
                 "thumbnail": archive::thumbnail_url(&self.cfg.archive, &item.id),
                 "tracks": tracks,
@@ -1132,31 +1128,31 @@ impl Service {
     fn download(&mut self, item_id: &str, files: &[String], as_playlist: bool) {
         let rights = self.plan().entitlements();
         if !rights.download {
-            self.notice("download", "Descargar necesita el plan Descargas o De por vida. Escuchar la vista previa es gratis.");
+            self.notice("download", vec![msg!("music.limit.download")]);
             return;
         }
         let Some(item) = self.items.iter().find(|i| i.id == item_id).cloned() else {
-            self.toast("Vuelve a abrir el álbum e inténtalo de nuevo.");
+            self.toast(vec![msg!("music.toast.reopen_album")]);
             return;
         };
         let Some(root) = self.cfg.downloads.clone() else {
-            self.toast("No se encontró tu carpeta de Música.");
+            self.toast(vec![msg!("music.toast.no_music_folder")]);
             return;
         };
         let wanted: Vec<&RemoteTrack> = item.tracks.iter().filter(|t| files.contains(&t.file)).collect();
         if wanted.is_empty() {
             return;
         }
-        // Espacio libre (con margen).
+        // Free space (with a margin).
         let needed: u64 = wanted.iter().map(|t| t.size).sum();
         if let Some(free) = os::free_space(&root) {
             if needed + 200 * 1024 * 1024 > free {
-                self.toast("No hay espacio suficiente en el disco para esta descarga.");
+                self.toast(vec![msg!("music.toast.no_space")]);
                 return;
             }
         }
         let Some(downloader) = self.ensure_downloader() else {
-            self.toast("No se pudo iniciar la descarga (sin conexión segura).");
+            self.toast(vec![msg!("music.toast.download_failed")]);
             return;
         };
         if !self.library.folders.iter().any(|f| root.starts_with(f)) {
@@ -1164,8 +1160,8 @@ impl Service {
             self.library.folders.push(root.clone());
             self.library_dirty = true;
         }
-        // Playlist del álbum (en el orden del álbum). Si ya no caben más en
-        // el plan, se descarga igual, sin crearla.
+        // The album's playlist (in album order). If the plan has no room
+        // left, it downloads anyway, without creating it.
         let existing = self.library.playlists.iter().find(|p| p.origin.as_deref() == Some(item.id.as_str())).map(|p| p.id.clone());
         let mut playlist_skipped = false;
         let as_playlist = as_playlist && {
@@ -1192,7 +1188,7 @@ impl Service {
         } else {
             None
         };
-        let artist_dir = library::safe_file_name(&item.creator, "Varios");
+        let artist_dir = library::safe_file_name(&item.creator, "Various Artists");
         let album_dir = library::safe_file_name(&item.title, &item.id);
         let mut seen_in_batch: HashSet<String> = HashSet::new();
         let mut queued = 0;
@@ -1211,7 +1207,7 @@ impl Service {
                 skipped += 1;
                 self.fill_slot(playlist_id.as_deref(), slot, Some(track_id.clone()));
                 let id = self.next_job_id();
-                self.jobs.insert(id, job_view(id, &item.id, remote, "skipped", why.describe(), Some(track_id)));
+                self.jobs.insert(id, job_view(id, &item.id, remote, "skipped", Some(why.message()), Some(track_id)));
                 continue;
             }
             if self.queued(&item.id, &remote.file) || !seen_in_batch.insert(key) {
@@ -1232,7 +1228,7 @@ impl Service {
                     playlist: playlist_id.clone().map(|p| (p, slot)),
                 },
             );
-            self.jobs.insert(id, job_view(id, &item.id, remote, "queued", "", None));
+            self.jobs.insert(id, job_view(id, &item.id, remote, "queued", None, None));
             downloader.push(Job {
                 id,
                 url: archive::download_url(&self.cfg.archive, &item.id, &remote.file),
@@ -1248,19 +1244,18 @@ impl Service {
         if playlist_id.is_some() {
             self.library_changed();
         }
-        let text = match (queued, skipped) {
-            (0, _) => "Ya tienes todo lo de este álbum: no se descarga nada.".to_owned(),
-            (q, 0) => format!("{q} descarga(s) en camino."),
-            (q, s) => format!("{q} descarga(s) en camino; {s} ya las tenías (no ocupan más espacio)."),
-        };
-        self.toast(&text);
+        let mut messages = vec![if queued == 0 { msg!("music.download.nothing") } else { msg!("music.download.queued", count = queued) }];
+        if queued > 0 && skipped > 0 {
+            messages.push(msg!("music.download.skipped", count = skipped));
+        }
+        self.toast(messages);
         if playlist_skipped {
-            self.notice("playlists", &format!("Las canciones se descargan, pero sin crear la playlist del álbum. {}", self.playlist_limit_text()));
+            self.notice("playlists", vec![msg!("music.limit.album_without_playlist"), self.playlist_limit()]);
         }
         if playlist_id.is_some() {
             self.emit_plan();
         }
-        // Portada del álbum (una vez).
+        // The album's cover (once).
         if !self.item_covers.contains_key(&item.id) {
             self.fetch_item_cover(&item);
         }
@@ -1321,8 +1316,8 @@ impl Service {
         if let Some(s) = slots.get_mut(slot) {
             *s = track;
         }
-        // En el orden del álbum; lo que ya tenía la playlist (de una
-        // descarga anterior) se conserva al final.
+        // In album order; what the playlist already had (from an earlier
+        // download) is kept at the end.
         let mut tracks: Vec<String> = slots.iter().flatten().cloned().collect();
         if let Some(p) = self.library.playlist_mut(playlist) {
             for t in &p.tracks {
@@ -1336,7 +1331,7 @@ impl Service {
         self.library_dirty = true;
     }
 
-    fn finish_job(&mut self, id: u64, state: &'static str, message: String, track: Option<String>) {
+    fn finish_job(&mut self, id: u64, state: &'static str, message: Option<Message>, track: Option<String>) {
         if let Some(job) = self.jobs.get_mut(&id) {
             job.state = state;
             job.message = message;
@@ -1370,8 +1365,8 @@ impl Service {
                 }
                 self.jobs_dirty = true;
             }
-            Progress::Failed { id, error } => self.finish_job(id, "failed", error, None),
-            Progress::Cancelled(id) => self.finish_job(id, "cancelled", "Cancelada".into(), None),
+            Progress::Failed { id, error } => self.finish_job(id, "failed", Some(error), None),
+            Progress::Cancelled(id) => self.finish_job(id, "cancelled", None, None),
             Progress::Finished { id, path } => {
                 if let Some(j) = self.jobs.get_mut(&id) {
                     j.state = "processing";
@@ -1383,20 +1378,21 @@ impl Service {
         }
     }
 
-    /// Una descarga terminó: se lee, se compara con lo que ya hay (por si
-    /// era la misma canción con otro nombre o formato) y se añade.
-    fn adopt_download(&mut self, id: u64, path: &Path) -> (&'static str, String, Option<String>) {
-        let Some(pending) = self.pending.get(&id) else { return ("failed", "descarga desconocida".into(), None) };
+    /// A download finished: it is read, compared with what is already there
+    /// (in case it was the same song under another name or format) and added.
+    fn adopt_download(&mut self, id: u64, path: &Path) -> (&'static str, Option<Message>, Option<String>) {
+        let Some(pending) = self.pending.get(&id) else { return ("failed", Some(msg!("music.job.unknown")), None) };
         let covers = self.cfg.dir.join("covers");
         let mut track = match scan::read_track(path, &covers, now()) {
             Ok(t) => t,
             Err(err) => {
+                eprintln!("downloaded file unreadable: {err}");
                 let _ = fs::remove_file(path);
-                return ("failed", format!("el archivo no se puede leer: {err}"), None);
+                return ("failed", Some(msg!("music.job.unreadable")), None);
             }
         };
         let remote = &pending.remote;
-        // Etiquetas del Archive donde el archivo no traía.
+        // The Archive's tags where the file had none.
         let from_file_name = track.title == scan::title_from_file_name(path);
         if from_file_name && !remote.title.is_empty() {
             track.title = remote.title.clone();
@@ -1423,15 +1419,15 @@ impl Service {
             creator: pending.creator.clone(),
         };
 
-        // ¿Ya estaba? (mismo contenido o misma canción por etiquetas).
+        // Was it there already? (same content or same song by tags).
         let candidate = Candidate { hash: Some(&track.hash), archive: None, artist: &track.artist, title: &track.title, duration: track.duration };
         let found = self.library.find_existing(&candidate).filter(|(_, t)| t.id != track.id).map(|(why, t)| (why, t.id.clone()));
         if let Some((why, existing)) = found {
             let _ = fs::remove_file(path);
             self.remember_alias(id, &existing, why);
-            return ("skipped", why.describe().to_owned(), Some(existing));
+            return ("skipped", Some(why.message()), Some(existing));
         }
-        // ¿Mismo audio? Solo contra canciones de duración parecida.
+        // Same audio? Only against songs of similar duration.
         if let Ok(print) = fingerprint::compute(path) {
             let nearby: Vec<(String, String, PathBuf)> = self
                 .library
@@ -1455,7 +1451,7 @@ impl Service {
                 if fingerprint::same_audio(&print, &other) {
                     let _ = fs::remove_file(path);
                     self.remember_alias(id, &other_id, Existing::SameAudio);
-                    return ("skipped", Existing::SameAudio.describe().to_owned(), Some(other_id));
+                    return ("skipped", Some(Existing::SameAudio.message()), Some(other_id));
                 }
             }
             self.fingerprints.insert(track.hash.clone(), fingerprint::encode(&print));
@@ -1463,11 +1459,11 @@ impl Service {
         }
         let track_id = track.id.clone();
         self.library.upsert(track);
-        ("done", String::new(), Some(track_id))
+        ("done", None, Some(track_id))
     }
 
-    /// Ese archivo del Archive es una canción que ya estaba: se recuerda para
-    /// no volver a descargarlo.
+    /// That Archive file is a song that was already there: remembered so it
+    /// is not downloaded again.
     fn remember_alias(&mut self, job: u64, track: &str, reason: Existing) {
         let Some(pending) = self.pending.get(&job) else { return };
         let (item, file) = (pending.item.clone(), pending.remote.file.clone());
@@ -1479,7 +1475,7 @@ impl Service {
         self.library_dirty = true;
     }
 
-    // -- Duplicados -------------------------------------------------------------------
+    // -- Duplicates -------------------------------------------------------------------
 
     fn find_duplicates(&mut self) {
         if self.dupes_running {
@@ -1499,8 +1495,8 @@ impl Service {
     }
 }
 
-/// Calcula las huellas que faltan (solo de canciones que tienen otra de
-/// duración parecida) y agrupa los duplicados.
+/// Computes the missing fingerprints (only for songs that have another of
+/// similar duration) and groups the duplicates.
 pub fn duplicates_job(
     library: &Library,
     known: &HashMap<String, String>,
@@ -1553,7 +1549,7 @@ pub fn duplicates_job(
     (groups, computed)
 }
 
-fn job_view(id: u64, item: &str, remote: &RemoteTrack, state: &'static str, message: &str, track: Option<String>) -> JobView {
+fn job_view(id: u64, item: &str, remote: &RemoteTrack, state: &'static str, message: Option<Message>, track: Option<String>) -> JobView {
     JobView {
         id,
         item: item.to_owned(),
@@ -1563,7 +1559,7 @@ fn job_view(id: u64, item: &str, remote: &RemoteTrack, state: &'static str, mess
         state,
         received: 0,
         size: remote.size,
-        message: message.to_owned(),
+        message,
         track_id: track,
     }
 }
@@ -1599,8 +1595,8 @@ mod tests {
         assert_eq!(Request::parse("buy:lifetime"), Some(Request::Buy(Plan::Lifetime)));
         assert_eq!(Request::parse("quality:best"), Some(Request::SetQuality(Quality::Best)));
         assert_eq!(
-            Request::parse(r#"playlist-save:{"name":" Fiesta ","tracks":["0123456789abcdef"]}"#),
-            Some(Request::SavePlaylist { id: None, name: "Fiesta".into(), tracks: vec!["0123456789abcdef".into()] })
+            Request::parse(r#"playlist-save:{"name":" Party ","tracks":["0123456789abcdef"]}"#),
+            Some(Request::SavePlaylist { id: None, name: "Party".into(), tracks: vec!["0123456789abcdef".into()] })
         );
         for bad in [
             "",
@@ -1611,10 +1607,10 @@ mod tests {
             r#"download:{"item":"x","files":["../../a"]}"#,
             r#"download:{"item":"a b","files":["a"]}"#,
             "cancel:x",
-            "buy:gratis",
+            "buy:free",
             r#"playlist-save:{"name":"","tracks":[]}"#,
             r#"playlist-save:{"name":"x","tracks":["C:\\Windows"]}"#,
-            r#"remove:{"ids":["no-es-un-id"]}"#,
+            r#"remove:{"ids":["not-an-id"]}"#,
             "reveal:../../x",
             "license-activate:",
             "quality:max",
@@ -1638,7 +1634,7 @@ mod tests {
             let handle = start(
                 Config {
                     dir: dir.join("music"),
-                    downloads: Some(dir.join("Música").join(DOWNLOADS_FOLDER)),
+                    downloads: Some(dir.join("Music").join(DOWNLOADS_FOLDER)),
                     store: Store::new(vault),
                     archive: archive.to_owned(),
                     license_api: archive.to_owned(),
@@ -1650,14 +1646,14 @@ mod tests {
             Self { handle, events, dir }
         }
 
-        /// Espera un aviso que cumpla `pred` y lo devuelve.
+        /// Waits for a message that satisfies `pred` and returns it.
         fn wait(&self, what: &str, pred: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 if let Some(v) = self.events.lock().unwrap().iter().rev().find(|v| pred(v)) {
                     return v.clone();
                 }
-                assert!(Instant::now() < deadline, "no llegó: {what}\n{:#?}", self.events.lock().unwrap().iter().map(|v| v["type"].clone()).collect::<Vec<_>>());
+                assert!(Instant::now() < deadline, "never arrived: {what}\n{:#?}", self.events.lock().unwrap().iter().map(|v| v["type"].clone()).collect::<Vec<_>>());
                 thread::sleep(Duration::from_millis(30));
             }
         }
@@ -1674,73 +1670,75 @@ mod tests {
     #[test]
     fn imports_rescans_and_finds_duplicates() {
         let h = Harness::new("svc-import", "http://127.0.0.1:9", None, false);
-        let music = h.dir.join("Mi música");
-        fs::create_dir_all(music.join("Álbum")).unwrap();
+        let music = h.dir.join("My music ♪");
+        fs::create_dir_all(music.join("Albüm")).unwrap();
         let melody = [261.6, 329.6, 392.0, 523.3, 440.0, 349.2, 293.7, 246.9];
-        fs::write(music.join("Álbum/01 - Uno.wav"), wav(12.0, &melody, 22050)).unwrap();
-        // Copia exacta en otra carpeta y la misma melodía a otra calidad.
-        fs::write(music.join("copia.wav"), wav(12.0, &melody, 22050)).unwrap();
-        fs::write(music.join("Uno (otra calidad).wav"), wav(12.0, &melody, 44100)).unwrap();
-        fs::write(music.join("distinta.wav"), wav(12.0, &[196.0, 155.6, 370.0, 207.7], 22050)).unwrap();
-        fs::write(music.join("notas.txt"), "x").unwrap();
+        fs::write(music.join("Albüm/01 - One.wav"), wav(12.0, &melody, 22050)).unwrap();
+        // An exact copy in another folder and the same melody at another quality.
+        fs::write(music.join("copy.wav"), wav(12.0, &melody, 22050)).unwrap();
+        fs::write(music.join("One (other quality).wav"), wav(12.0, &melody, 44100)).unwrap();
+        fs::write(music.join("different.wav"), wav(12.0, &[196.0, 155.6, 370.0, 207.7], 22050)).unwrap();
+        fs::write(music.join("notes.txt"), "x").unwrap();
 
         h.handle.request(Request::Ready);
-        h.wait("plan inicial", |v| v["type"] == "plan" && v["plan"] == "free" && v["configured"] == false);
+        h.wait("initial plan", |v| v["type"] == "plan" && v["plan"] == "free" && v["configured"] == false);
         h.handle.request(Request::Import(music.clone()));
-        let done = h.wait("fin de importación", |v| v["type"] == "scan" && v["running"] == false);
+        let done = h.wait("end of import", |v| v["type"] == "scan" && v["running"] == false);
         assert_eq!(done["added"], 4, "{done}");
-        let lib = h.wait("biblioteca", |v| v["type"] == "library" && v["tracks"].as_array().is_some_and(|t| t.len() == 4));
+        assert_eq!(done["messages"][0], serde_json::json!({"key": "music.scan.new", "args": {"count": 4}}));
+        let lib = h.wait("library", |v| v["type"] == "library" && v["tracks"].as_array().is_some_and(|t| t.len() == 4));
         assert_eq!(lib["folders"][0], music.to_string_lossy().as_ref());
-        assert!(lib["tracks"].as_array().unwrap().iter().any(|t| t["title"] == "Uno"));
+        assert!(lib["tracks"].as_array().unwrap().iter().any(|t| t["title"] == "One"));
 
         h.clear();
         h.handle.request(Request::FindDuplicates);
-        let dupes = h.wait("duplicados", |v| v["type"] == "dupes" && v["running"] == false);
+        let dupes = h.wait("duplicates", |v| v["type"] == "dupes" && v["running"] == false);
         let groups = dupes["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{dupes}");
-        assert_eq!(groups[0]["tracks"].as_array().unwrap().len(), 3, "copia exacta + misma grabación");
+        assert_eq!(groups[0]["tracks"].as_array().unwrap().len(), 3, "exact copy + same recording");
         assert_eq!(groups[0]["reason"], "same-file");
 
-        // Borrar un archivo y volver a revisar: desaparece.
-        fs::remove_file(music.join("distinta.wav")).unwrap();
+        // Delete a file and check again: it disappears.
+        fs::remove_file(music.join("different.wav")).unwrap();
         h.clear();
         h.handle.request(Request::Rescan);
-        let done = h.wait("re-escaneo", |v| v["type"] == "scan" && v["running"] == false);
+        let done = h.wait("rescan", |v| v["type"] == "scan" && v["running"] == false);
         assert_eq!((done["added"].as_u64(), done["removed"].as_u64()), (Some(0), Some(1)));
+        assert_eq!(done["messages"][0]["key"], "music.scan.up_to_date");
 
-        // Plan Gratis: 2 playlists; la tercera se explica (sin ventanas) y
-        // no se crea. Editar las que hay sigue funcionando.
+        // Free plan: 2 playlists; the third is explained (no windows) and
+        // not created. Editing the existing ones still works.
         let first_track = lib["tracks"][0]["id"].as_str().unwrap().to_owned();
-        for name in ["Una", "Dos"] {
+        for name in ["One", "Two"] {
             h.handle.request(Request::SavePlaylist { id: None, name: name.into(), tracks: vec![first_track.clone()] });
         }
-        let lib = h.wait("dos playlists", |v| v["type"] == "library" && v["playlists"].as_array().is_some_and(|p| p.len() == 2));
-        let plan = h.wait("contador", |v| v["type"] == "plan" && v["playlists"] == 2);
+        let lib = h.wait("two playlists", |v| v["type"] == "library" && v["playlists"].as_array().is_some_and(|p| p.len() == 2));
+        let plan = h.wait("counter", |v| v["type"] == "plan" && v["playlists"] == 2);
         assert_eq!(plan["entitlements"]["maxPlaylists"], 2);
         h.clear();
-        h.handle.request(Request::SavePlaylist { id: None, name: "Tres".into(), tracks: vec![] });
-        let notice = h.wait("límite", of_type("notice"));
+        h.handle.request(Request::SavePlaylist { id: None, name: "Three".into(), tracks: vec![] });
+        let notice = h.wait("limit", of_type("notice"));
         assert_eq!(notice["feature"], "playlists");
-        assert!(notice["text"].as_str().unwrap().contains("máximo del plan Gratis"), "{notice}");
+        assert_eq!(notice["messages"][0], serde_json::json!({"key": "music.limit.playlists_free", "args": {"count": 2, "next": 5}}), "{notice}");
         let existing = lib["playlists"][0]["id"].as_str().unwrap().to_owned();
-        h.handle.request(Request::SavePlaylist { id: Some(existing), name: "Una (renombrada)".into(), tracks: vec![] });
-        h.wait("editada", |v| {
-            v["type"] == "library" && v["playlists"].as_array().is_some_and(|p| p.len() == 2 && p.iter().any(|p| p["name"] == "Una (renombrada)"))
+        h.handle.request(Request::SavePlaylist { id: Some(existing), name: "One (renamed)".into(), tracks: vec![] });
+        h.wait("edited", |v| {
+            v["type"] == "library" && v["playlists"].as_array().is_some_and(|p| p.len() == 2 && p.iter().any(|p| p["name"] == "One (renamed)"))
         });
 
-        // Lo guardado se recupera al reabrir.
+        // What was saved comes back on reopening.
         h.handle.shutdown(Duration::from_secs(5));
         let (vault, _) = Vault::open(&h.dir.join("vault.key"), &TestProtector(0x5a)).unwrap();
         let store = Store::new(vault);
         let saved: Library = store.load(&h.dir.join("music/library.enc"), LIBRARY).unwrap();
         assert_eq!(saved.tracks.len(), 3);
-        assert!(!fs::read(h.dir.join("music/library.enc")).unwrap().windows(4).any(|w| w == b"Uno\""), "cifrada");
+        assert!(!fs::read(h.dir.join("music/library.enc")).unwrap().windows(4).any(|w| w == b"One\""), "encrypted");
         let _ = fs::remove_dir_all(&h.dir);
     }
 
     fn album_json() -> String {
         let mut item = crate::music::archive::tests::sample_item();
-        // Tamaños y sumas reales de lo que sirve el servidor de pruebas.
+        // Real sizes and checksums of what the test server serves.
         let a = wav(8.0, &[261.6, 329.6, 392.0, 523.3], 22050);
         let b = wav(8.0, &[196.0, 155.6, 370.0, 207.7], 22050);
         let sha = |d: &[u8]| {
@@ -1760,7 +1758,7 @@ mod tests {
                 f["sha1"] = sha(&b).into();
                 f["length"] = "8.0".into();
             } else if name == "TAM033-Ronan_Dec-10-Final.mp3" {
-                // Mismo audio que la 1 (otro "archivo"): se descarga y se descarta.
+                // The same audio as track 1 (another "file"): downloaded and discarded.
                 let c = wav(8.0, &[261.6, 329.6, 392.0, 523.3], 44100);
                 f["size"] = c.len().to_string().into();
                 f["sha1"] = sha(&c).into();
@@ -1794,22 +1792,24 @@ mod tests {
                 Reply::json(404, "{}")
             }
         }));
-        // Sin plan: no se puede descargar.
+        // No plan: downloading is not allowed.
         let free = Harness::new("svc-free", &base, None, false);
         free.handle.request(Request::Item("TAM033-Ronan_Dec".into()));
-        free.wait("álbum", |v| v["type"] == "item" && v["item"]["tracks"].as_array().is_some());
+        free.wait("album", |v| v["type"] == "item" && v["item"]["tracks"].as_array().is_some());
         free.handle.request(Request::Download { item: "TAM033-Ronan_Dec".into(), files: vec!["TAM033-Ronan_Dec-1-Supernova.mp3".into()], playlist: false });
-        assert_eq!(free.wait("límite", of_type("notice"))["feature"], "download");
+        let notice = free.wait("limit", of_type("notice"));
+        assert_eq!((notice["feature"].as_str(), notice["messages"][0]["key"].as_str()), (Some("download"), Some("music.limit.download")));
         free.handle.shutdown(Duration::from_secs(2));
 
         let h = Harness::new("svc-download", &base, None, true);
         h.handle.request(Request::Ready);
-        h.wait("plan dev", |v| v["type"] == "plan" && v["plan"] == "lifetime" && v["dev"] == true);
+        h.wait("dev plan", |v| v["type"] == "plan" && v["plan"] == "lifetime" && v["dev"] == true);
         h.handle.request(Request::Search { query: "ronan".into(), page: 1, popular: true });
-        let found = h.wait("búsqueda", of_type("search"));
+        let found = h.wait("search", of_type("search"));
         assert_eq!(found["hits"][0]["id"], "TAM033-Ronan_Dec");
         h.handle.request(Request::Item("TAM033-Ronan_Dec".into()));
-        let item = h.wait("álbum", |v| v["type"] == "item" && v["item"]["tracks"].as_array().is_some());
+        let item = h.wait("album", |v| v["type"] == "item" && v["item"]["tracks"].as_array().is_some());
+        assert_eq!((item["item"]["license"].as_str(), item["item"]["licenseLabel"].as_str()), (Some("BySa"), Some("CC BY-SA")));
         let files: Vec<String> = item["item"]["tracks"].as_array().unwrap().iter().map(|t| t["file"].as_str().unwrap().to_owned()).collect();
         assert_eq!(files.len(), 3);
 
@@ -1819,34 +1819,34 @@ mod tests {
             v["type"] == "downloads"
                 && v["jobs"].as_array().is_some_and(|j| j.len() == 3 && j.iter().all(|j| !matches!(j["state"].as_str(), Some("queued" | "downloading" | "processing"))))
         };
-        let jobs = h.wait("descargas terminadas", finished);
+        let jobs = h.wait("downloads finished", finished);
         let states: Vec<&str> = jobs["jobs"].as_array().unwrap().iter().map(|j| j["state"].as_str().unwrap()).collect();
         assert_eq!(states.iter().filter(|s| **s == "done").count(), 2, "{jobs}");
         let skipped = jobs["jobs"].as_array().unwrap().iter().find(|j| j["state"] == "skipped").unwrap();
-        assert_eq!(skipped["message"], "ya la tienes (mismo audio)", "{skipped}");
-        let lib = h.wait("biblioteca con el álbum", |v| {
+        assert_eq!(skipped["message"], serde_json::json!({"key": "music.existing.same_audio"}), "{skipped}");
+        let lib = h.wait("library with the album", |v| {
             v["type"] == "library" && v["playlists"].as_array().is_some_and(|p| p.len() == 1 && p[0]["tracks"].as_array().is_some_and(|t| t.len() == 3))
         });
-        assert_eq!(lib["tracks"].as_array().unwrap().len(), 2, "el duplicado no ocupa espacio");
+        assert_eq!(lib["tracks"].as_array().unwrap().len(), 2, "the duplicate takes no space");
         let playlist = &lib["playlists"][0];
         assert_eq!(playlist["origin"], "TAM033-Ronan_Dec");
-        // La playlist tiene las 3 posiciones: la repetida apunta a la que ya había.
+        // The playlist has all 3 slots: the repeated one points to the existing song.
         let ids: Vec<&str> = playlist["tracks"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
         assert_eq!(ids[0], ids[2], "{ids:?}");
-        let saved_dir = h.dir.join("Música").join(DOWNLOADS_FOLDER).join("Ronan Dec").join("Ronan Dec. - Hirnwald EP [TAM033]");
+        let saved_dir = h.dir.join("Music").join(DOWNLOADS_FOLDER).join("Ronan Dec").join("Ronan Dec. - Hirnwald EP [TAM033]");
         let mut on_disk: Vec<String> = fs::read_dir(&saved_dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         on_disk.sort();
         assert_eq!(on_disk.len(), 2, "{on_disk:?}");
         let track = lib["tracks"].as_array().unwrap().iter().find(|t| t["license"] == "CC BY-SA").unwrap();
         assert_eq!(track["source"], "archive");
 
-        // Volver a pedir el álbum: todo se salta, no se descarga nada.
+        // Asking for the album again: everything is skipped, nothing downloads.
         h.clear();
         h.handle.request(Request::Download { item: "TAM033-Ronan_Dec".into(), files, playlist: true });
-        let toast = h.wait("aviso", of_type("toast"));
-        assert_eq!(toast["text"], "Ya tienes todo lo de este álbum: no se descarga nada.");
+        let toast = h.wait("notice", of_type("toast"));
+        assert_eq!(toast["messages"], serde_json::json!([{"key": "music.download.nothing"}]));
         let downloads = log.lock().unwrap().iter().filter(|s| s.path.starts_with("/download/") && s.path.ends_with(".mp3")).count();
-        assert_eq!(downloads, 3, "cada canción se pidió una sola vez");
+        assert_eq!(downloads, 3, "each song was requested only once");
         h.handle.shutdown(Duration::from_secs(5));
         let _ = fs::remove_dir_all(&h.dir);
     }

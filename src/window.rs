@@ -1,4 +1,4 @@
-//! Ventana nativa: sin decoraciones, siempre visible, 16:9 por defecto.
+//! Native window: no decorations, always on top, 16:9 by default.
 
 use tao::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
@@ -13,13 +13,13 @@ use tao::platform::windows::WindowBuilderExtWindows;
 use crate::config::WindowGeometry;
 
 const TITLE: &str = crate::platform::APP_NAME;
-/// 640 × 360 lógicos: 16:9, cómodo como miniatura en 1080p y 1440p.
+/// 640 × 360 logical: 16:9, comfortable as a thumbnail at 1080p and 1440p.
 const DEFAULT_SIZE: (f64, f64) = (640.0, 360.0);
-/// Por debajo de 256 × 144 la interfaz de YouTube deja de ser usable.
+/// Below 256 × 144 YouTube's interface is no longer usable.
 const MIN_SIZE: (f64, f64) = (256.0, 144.0);
 
-/// Crea la ventana oculta; se muestra cuando el webview ya existe, para
-/// evitar un destello blanco durante el arranque.
+/// Creates the window hidden; it is shown once the webview exists, to
+/// avoid a white flash at startup.
 pub fn build<T: 'static>(
     target: &EventLoopWindowTarget<T>,
     saved: Option<WindowGeometry>,
@@ -28,7 +28,7 @@ pub fn build<T: 'static>(
         .with_title(TITLE)
         .with_window_icon(crate::icon::window_icon())
         .with_decorations(false)
-        // Nunca topmost al crearla: App lo aplica tras crear el webview.
+        // Never topmost when created: App applies it after creating the webview.
         .with_always_on_top(false)
         .with_resizable(true)
         .with_visible(false)
@@ -37,12 +37,12 @@ pub fn build<T: 'static>(
 
     #[cfg(windows)]
     {
-        // No usamos arrastrar-y-soltar de archivos: evita registrar un
-        // IDropTarget OLE que no sirve para nada aquí.
+        // File drag-and-drop is not used: avoids registering an OLE
+        // IDropTarget that is useless here.
         builder = builder
             .with_drag_and_drop(false)
             .with_taskbar_icon(crate::icon::window_icon())
-            // Nombre de clase estable: lo usan herramientas como PowerToys.
+            // Stable class name: tools like PowerToys use it.
             .with_window_classname("YtMiniPlayerWindow");
     }
 
@@ -55,9 +55,8 @@ pub fn build<T: 'static>(
     builder.build(target)
 }
 
-/// Geometría actual para guardar al cerrar. Devuelve `None` si la ventana
-/// está minimizada o maximizada (Win+↑), porque esas posiciones no son las
-/// que el usuario quiere recuperar.
+/// Current geometry to save on exit. `None` if the window is minimized or
+/// maximized (Win+↑), because those are not positions the user wants back.
 pub fn current_geometry(window: &Window) -> Option<WindowGeometry> {
     if window.is_minimized() || window.is_maximized() {
         return None;
@@ -72,8 +71,8 @@ pub fn current_geometry(window: &Window) -> Option<WindowGeometry> {
     })
 }
 
-/// La geometría guardada solo se usa si sigue cayendo en algún monitor
-/// conectado (p. ej. no si se desconectó el segundo monitor).
+/// The saved geometry is only used if it still falls on a connected
+/// monitor (e.g. not if the second monitor was unplugged).
 fn is_reachable<T: 'static>(target: &EventLoopWindowTarget<T>, geometry: &WindowGeometry) -> bool {
     target.available_monitors().any(|monitor| {
         let position = monitor.position();

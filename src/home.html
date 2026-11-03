@@ -1,156 +1,496 @@
 <!doctype html>
-<html lang="es">
+<html lang="__YTMP_LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YT Mini Player</title>
 <style>
+  /* The palette, deepest to lightest. */
   :root {
-    --ink: #141826;
-    --panel: #1d2236;
-    --line: #262c45;
-    --line-strong: #2f3756;
-    --text: #eef0f8;
-    --muted: #9aa3c2;
-    --dim: #5d6690;
-    --accent: #8fa6ff;
-    --ok: #6fd39a;
-    --warn: #e8b85c;
-    --display: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --deep-twilight: #03045e;
+    --french-blue: #023e8a;
+    --bright-teal-blue: #0077b6;
+    --blue-green: #0096c7;
+    --turquoise-surf: #00b4d8;
+    --sky-aqua: #48cae4;
+    --frosted-blue: #90e0ef;
+    --frosted-blue-2: #ade8f4;
+    --light-cyan: #caf0f8;
+    /* What each one does: the deep ones are the water, the light ones the
+       text, turquoise is what you can press. */
+    --ground: var(--deep-twilight);
+    --surface: rgba(2, 62, 138, .38);
+    --surface-strong: var(--french-blue);
+    --line: var(--french-blue);
+    --line-strong: var(--bright-teal-blue);
+    --text: var(--light-cyan);
+    --text-2: var(--frosted-blue-2);
+    --text-3: var(--frosted-blue);
+    --dim: rgba(144, 224, 239, .62);
+    --accent: var(--turquoise-surf);
+    --accent-hover: var(--sky-aqua);
+    --link: var(--sky-aqua);
+    --alert: #ff9f8a;
+    --tide: linear-gradient(90deg, var(--bright-teal-blue), var(--blue-green), var(--turquoise-surf), var(--sky-aqua), var(--frosted-blue), var(--frosted-blue-2), var(--light-cyan));
+    --display: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--text); }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; color: var(--text); }
+  html { background: var(--ground); }
   body {
     font: 13px/1.4 var(--body);
     -webkit-font-smoothing: antialiased;
-    display: flex; flex-direction: column; min-height: 100vh;
-    padding: 0 16px 12px;
+    display: flex; flex-direction: column; min-height: 100vh; overflow: hidden;
+    padding: 0 18px 12px;
+    /* Light from the surface, top right. */
+    background: radial-gradient(80% 70% at 100% 0%, rgba(0, 119, 182, .28), transparent 70%),
+                radial-gradient(60% 50% at 0% 100%, rgba(0, 150, 199, .12), transparent 70%);
   }
+  /* Above the waves; the header (and its language menu) above the rest. */
+  header, main, footer { position: relative; z-index: 1; }
+  header { z-index: 2; }
   button, input { font: inherit; color: inherit; }
   button { background: none; border: 0; margin: 0; padding: 0; cursor: pointer; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--sky-aqua); outline-offset: 2px; }
+  /* Fields show focus with their own border. */
+  input:focus-visible { outline: none; }
+  svg { display: block; }
 
-  /* Cabecera: también sirve para arrastrar la ventana. */
+  /* Header: also drags the window. */
   header {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 40px 8px 0; cursor: grab; user-select: none;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 14px;
+    padding: 14px 0 12px; cursor: grab; user-select: none;
   }
-  h1 {
-    margin: 0; font: 600 22px/1.1 var(--display); letter-spacing: 0.01em;
+  h1 { margin: 0; font: 600 22px/1.15 var(--display); letter-spacing: -.01em; color: var(--light-cyan); }
+  .lede { grid-column: 1; margin: 0; color: var(--text-3); font-size: 12.5px; }
+  .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px; cursor: default; }
+  .pill {
+    display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 9px; border-radius: 15px;
+    color: var(--text-2); font-size: 12.5px; white-space: nowrap; border: 1px solid var(--line-strong);
+    background: rgba(2, 62, 138, .35);
   }
-  .startup { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
-  .switch {
-    flex: none; width: 30px; height: 18px; border-radius: 9px; background: #3a4163; position: relative;
-  }
-  .switch::after {
-    content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
-    background: #fff; transition: transform .15s;
-  }
-  .startup[aria-checked="true"] .switch { background: #6c8cff; }
-  .startup[aria-checked="true"] .switch::after { transform: translateX(12px); }
+  .pill:hover, .pill[aria-expanded="true"] { background: var(--bright-teal-blue); color: var(--light-cyan); }
+  .pill svg { flex: none; width: 16px; height: 16px; color: var(--sky-aqua); }
+  .pill:hover svg { color: var(--light-cyan); }
 
-  /* Guía de canales: filas separadas por líneas, no tarjetas. */
-  .guide {
-    display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px;
-    border-top: 1px solid var(--line);
+  /* Language: a globe and the language's own name, so it can be found
+     whatever language the app is in. */
+  .lang-box { position: relative; }
+  .lang-menu {
+    position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; min-width: 190px; margin: 0; padding: 4px 0;
+    background: var(--deep-twilight); border: 1px solid var(--bright-teal-blue); border-radius: 8px; cursor: default;
+    box-shadow: 0 12px 30px rgba(1, 2, 40, .6);
   }
-  .channel {
-    position: relative; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 2px 10px;
-    width: 100%; min-height: 50px; padding: 7px 8px 7px 10px; text-align: left;
-    border-bottom: 1px solid var(--line);
+  .lang-menu[hidden] { display: none; }
+  .lang-menu button {
+    display: grid; grid-template-columns: 16px 1fr; align-items: baseline; gap: 0 8px;
+    width: 100%; padding: 6px 12px 6px 10px; text-align: left;
   }
-  .channel::before {
-    content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px;
-    background: var(--brand); opacity: .35;
-  }
-  .channel:hover, .channel:focus-visible { background: #1a1f31; }
-  .channel:hover::before, .channel:focus-visible::before { opacity: 1; }
-  .channel:focus-visible { outline-offset: -2px; }
-  /* "Mi música": a lo ancho, debajo de los servicios. */
-  .channel.wide { grid-column: 1 / -1; background: linear-gradient(90deg, rgba(194, 179, 255, .07), transparent 60%); }
-  .channel.wide::before { opacity: .7; }
-  .num {
-    grid-row: 1 / span 2; font: 600 26px/1 var(--display); color: var(--dim);
-    font-variant-numeric: tabular-nums; text-align: center;
-  }
-  .channel:hover .num, .channel:focus-visible .num { color: var(--text); }
-  .name { font: 600 17px/1.15 var(--display); }
-  .caption { grid-column: 2; color: var(--muted); font-size: 12px; }
-  .caption.warn { color: var(--warn); }
-  .last { grid-row: 1 / span 2; grid-column: 3; color: var(--accent); font-size: 11.5px; }
-  .channel[aria-busy="true"] .caption { color: var(--accent); }
+  .lang-menu button:hover, .lang-menu button:focus-visible { background: var(--french-blue); outline: none; }
+  .lang-menu .check { color: var(--turquoise-surf); visibility: hidden; }
+  .lang-menu [aria-checked="true"] .check { visibility: visible; }
+  .lang-menu .native { font-size: 13px; }
+  .lang-menu .local { grid-column: 2; color: var(--dim); font-size: 12px; }
 
-  footer { margin-top: auto; padding-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  form { display: flex; gap: 8px; }
+  /* The services as a keypad: 1 2 3 / 4 5 6 / 7 8 9, the keys that open
+     them. Hairlines between the keys; each row a shade deeper, like the
+     water going down. */
+  .keypad {
+    flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(38px, 1fr)); gap: 1px;
+    background: rgba(0, 119, 182, .5); border: 1px solid rgba(0, 119, 182, .5); border-radius: 14px; overflow: hidden;
+    max-height: 330px;
+  }
+  .key {
+    --tone: var(--frosted-blue-2);
+    position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0 12px;
+    min-width: 0; padding: 6px 14px; text-align: left; background: rgba(3, 4, 94, .94);
+    transition: background-color .15s;
+  }
+  .key:nth-child(n+4) { --tone: var(--sky-aqua); }
+  .key:nth-child(n+7) { --tone: var(--blue-green); }
+  .key::after {
+    content: ""; position: absolute; left: 14px; right: 14px; bottom: 0; height: 2px; border-radius: 2px 2px 0 0;
+    background: var(--tide); opacity: 0; transition: opacity .15s;
+  }
+  .key:hover, .key:focus-visible { background: rgba(2, 62, 138, .96); }
+  .key:hover::after, .key:focus-visible::after, .key[aria-busy="true"]::after { opacity: 1; }
+  .key:focus-visible { outline-offset: -3px; }
+  .digit {
+    font: 300 clamp(24px, 8vh, 46px)/1 var(--display); color: var(--tone); font-variant-numeric: tabular-nums;
+    min-width: .62em; text-align: center;
+  }
+  .key:hover .digit, .key:focus-visible .digit { color: var(--light-cyan); }
+  .label { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+  .name {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+    font: 600 15px/1.2 var(--display); color: var(--light-cyan);
+  }
+  .name span {
+    overflow: hidden; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .caption {
+    color: var(--text-3); font-size: 12px; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .caption.warn { color: var(--frosted-blue-2); }
+  /* Needs DRM that is not there yet: a coral dot by the name (and the
+     caption says why, when there is room for it). */
+  .needs { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--alert); }
+  .last {
+    position: absolute; top: 7px; right: 8px; color: var(--deep-twilight); background: var(--tone);
+    font-size: 10.5px; font-weight: 600; line-height: 1.5; padding: 0 7px; border-radius: 9px;
+  }
+  .key[aria-busy="true"] .caption { color: var(--sky-aqua); }
+
+  footer { padding-top: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 8px; }
+  .together { height: 34px; padding: 0 14px 0 11px; border-radius: 17px; font-size: 13px; }
+  .together svg { width: 19px; height: 19px; }
+  form { display: flex; gap: 8px; min-width: 0; }
   label.site { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  input[type="url"], input[type="text"] {
-    flex: 1; min-width: 0; width: 100%; height: 32px; padding: 0 10px; border-radius: 8px;
-    background: var(--panel); border: 1px solid var(--line-strong); color: var(--text);
+  input[type="text"] {
+    flex: 1; min-width: 0; width: 100%; height: 34px; padding: 0 14px; border-radius: 17px;
+    background: rgba(3, 4, 94, .82); border: 1px solid var(--bright-teal-blue); color: var(--text);
   }
+  input[type="text"]:focus { border-color: var(--sky-aqua); box-shadow: 0 0 0 3px rgba(72, 202, 228, .18); }
   input::placeholder { color: var(--dim); }
   .open {
-    height: 32px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: var(--ink); font-weight: 600;
+    height: 34px; padding: 0 18px; border-radius: 17px; font-weight: 600; color: var(--deep-twilight);
+    background: var(--turquoise-surf);
   }
-  .open:hover { background: #a6b8ff; }
-  .status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; color: var(--muted); font-size: 12px; }
+  .open:hover { background: var(--sky-aqua); }
+  .status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; color: var(--text-3); font-size: 12px; }
   .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); transform: translateY(-1px); }
-  .status[data-state="ok"] .dot { background: var(--ok); }
-  .status[data-state="missing"] .dot { background: var(--warn); }
+  .status[data-state="ok"] .dot { background: var(--sky-aqua); box-shadow: 0 0 0 3px rgba(0, 150, 199, .35); }
+  .status[data-state="missing"] .dot { background: var(--alert); }
   .status .text { flex: 1; min-width: 0; }
-  .recheck { color: var(--accent); font-size: 12px; white-space: nowrap; }
+  .recheck { color: var(--link); font-size: 12px; white-space: nowrap; min-height: 24px; padding: 0 4px; }
   .recheck:hover { text-decoration: underline; }
 
-  @media (max-width: 560px) {
-    .guide { grid-template-columns: 1fr; }
-    header { flex-wrap: wrap; }
+  /* Where the player's controls live: a small tab on the right edge
+     (pointing at it shows the button bar). */
+  .edge {
+    position: fixed; z-index: 1; right: 0; top: 50%; width: 13px; height: 46px; margin-top: -23px;
+    display: grid; place-items: center; border-radius: 8px 0 0 8px; color: var(--deep-twilight);
+    background: linear-gradient(180deg, var(--sky-aqua), var(--blue-green));
   }
-  @media (max-height: 300px) {
-    .channel { min-height: 40px; padding-top: 4px; padding-bottom: 4px; }
+  .edge svg { width: 9px; height: 9px; }
+
+  /* Three slow waves along the bottom edge: the palette's water. */
+  .waves { position: fixed; left: 0; right: 0; bottom: 0; height: var(--waves-height, clamp(60px, 22vh, 160px)); pointer-events: none; z-index: 0; overflow: hidden; }
+  .waves svg { position: absolute; left: 0; bottom: 0; width: 200%; height: 100%; }
+  .waves .w1 { fill: var(--french-blue); opacity: .85; animation: drift 46s linear infinite; }
+  .waves .w2 { fill: var(--bright-teal-blue); opacity: .42; animation: drift 33s linear infinite reverse; }
+  .waves .w3 { fill: var(--blue-green); opacity: .34; animation: drift 25s linear infinite; }
+  @keyframes drift { to { transform: translateX(-50%); } }
+
+  /* --- First-run welcome --------------------------------------------- */
+  .welcome {
+    position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 12px;
+    background: rgba(3, 4, 94, .78); cursor: default;
+  }
+  .sheet {
+    position: relative; width: min(500px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column;
+    background: var(--deep-twilight); border: 1px solid var(--bright-teal-blue); border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(1, 2, 40, .7);
+  }
+  .sheet::before { content: ""; flex: none; height: 3px; background: var(--tide); }
+  .art {
+    flex: none; height: 116px; display: grid; place-items: center; overflow: hidden;
+    background: radial-gradient(70% 90% at 50% 100%, rgba(0, 150, 199, .3), transparent 70%), var(--french-blue);
+  }
+  .art svg { width: 240px; height: 110px; overflow: visible; }
+  .art .frame { fill: rgba(3, 4, 94, .9); stroke: var(--sky-aqua); stroke-width: 1.5; }
+  .art .soft { fill: rgba(0, 119, 182, .45); }
+  .art .key-cell { fill: rgba(3, 4, 94, .9); stroke: rgba(72, 202, 228, .5); stroke-width: 1; }
+  .art .hot { fill: var(--turquoise-surf); }
+  .art .ink { fill: var(--light-cyan); }
+  .art .ink-dim { fill: var(--frosted-blue); }
+  .art .dark { fill: var(--deep-twilight); }
+  .art .stroke { fill: none; stroke: var(--frosted-blue-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .art .stroke-hot { fill: none; stroke: var(--turquoise-surf); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .art text { font: 300 14px var(--display); }
+  .copy { padding: 16px 22px 4px; }
+  .step-count { margin: 0 0 4px; color: var(--sky-aqua); font-size: 12px; }
+  .copy h2 { margin: 0 0 6px; font: 600 19px/1.25 var(--display); color: var(--light-cyan); }
+  .copy p.body { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+  .copy kbd {
+    font: 12px/1 var(--body); padding: 2px 6px; border-radius: 4px; background: var(--french-blue);
+    box-shadow: inset 0 -1px 0 var(--bright-teal-blue); color: var(--frosted-blue-2); white-space: nowrap;
+  }
+  .steps-nav { display: flex; align-items: center; gap: 10px; padding: 14px 22px 18px; }
+  .dots { display: flex; gap: 6px; margin-right: auto; }
+  .dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--french-blue); box-shadow: inset 0 0 0 1px var(--bright-teal-blue); }
+  .dots span.on { width: 20px; border-radius: 4px; background: var(--turquoise-surf); box-shadow: none; }
+  .ghost-button { height: 32px; padding: 0 12px; border-radius: 16px; color: var(--text-3); }
+  .ghost-button:hover { color: var(--light-cyan); background: rgba(0, 119, 182, .35); }
+  .next { height: 32px; padding: 0 18px; border-radius: 16px; font-weight: 600; color: var(--deep-twilight); background: var(--turquoise-surf); }
+  .next:hover { background: var(--sky-aqua); }
+
+  @media (prefers-reduced-motion: reduce) { .waves .w1, .waves .w2, .waves .w3 { animation: none; } }
+
+  /* Small windows: names only on the keys (the dot still marks DRM), the
+     DRM line and the lede go; the header and buttons get tighter. */
+  @media (max-width: 560px), (max-height: 340px) {
     .caption { display: none; }
-    .num { font-size: 22px; }
+    .key { padding: 4px 10px; gap: 0 9px; }
+    .name { font-size: 14px; }
+    .last { top: 4px; right: 5px; font-size: 10px; padding: 0 5px; }
   }
-  @media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+  @media (max-height: 340px) { .status { display: none; } .waves { --waves-height: 46px; } }
+  @media (max-height: 300px) {
+    header { padding: 9px 0 8px; }
+    h1 { font-size: 18px; }
+    .lede { display: none; }
+    footer { padding-top: 8px; }
+    .together, .open, input[type="text"], .pill { height: 30px; }
+    .art { display: none; }
+  }
+  @media (max-width: 520px) {
+    #lang-name, .pill .word { display: none; }
+    .pill { padding: 0 7px; }
+    .together .word { display: none; }
+    .together { padding: 0 8px; }
+    .last { display: none; }
+  }
+  @media (max-width: 380px) {
+    body { padding: 0 10px 10px; }
+    .key { grid-template-columns: minmax(0, 1fr); padding: 4px 8px; }
+    .digit { display: none; }
+    .name { font-size: 13px; }
+  }
+  @media (max-height: 420px) { .copy { padding-top: 12px; } .steps-nav { padding: 10px 22px 12px; } }
+  @media (prefers-reduced-motion: reduce) { .key, .key::after { transition: none; } }
 </style>
 </head>
 <body>
   <header data-ytmp-drag>
-    <h1>¿Qué vemos?</h1>
-    <button class="startup" id="startup" type="button" role="switch" aria-checked="false"
-      title="Al abrir la app, entrar directo al último servicio en lugar de este menú">
-      <span>Abrir el último al iniciar</span><span class="switch" aria-hidden="true"></span>
-    </button>
+    <h1 data-i18n="home.title"></h1>
+    <p class="lede" data-i18n="home.lede"></p>
+    <div class="actions">
+      <div class="lang-box">
+        <button class="pill lang" id="lang" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="lang-menu">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+            <circle cx="8" cy="8" r="6.4"/><path d="M1.6 8h12.8M8 1.6c1.9 1.8 2.8 4 2.8 6.4S9.9 12.6 8 14.4C6.1 12.6 5.2 10.4 5.2 8S6.1 3.4 8 1.6z"/>
+          </svg>
+          <span id="lang-name"></span>
+        </button>
+        <div class="lang-menu" id="lang-menu" role="menu" hidden></div>
+      </div>
+      <button class="pill" id="settings" type="button" data-i18n-title="home.settings_tip" data-i18n-aria-label="home.settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z"/>
+          <path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4z"/>
+        </svg>
+        <span class="word" data-i18n="home.settings"></span>
+      </button>
+    </div>
   </header>
 
-  <main class="guide" id="guide" aria-label="Servicios"></main>
+  <main class="keypad" id="guide" data-i18n-aria-label="home.services"></main>
 
   <footer>
+    <button class="pill together" id="together" type="button" data-i18n-title="home.together_caption" data-i18n-aria-label="home.together">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2.5" y="5" width="13" height="10" rx="2.2"/><path d="M7.6 8.1v3.8l3.1-1.9z" fill="currentColor"/>
+        <path d="M8.5 19h11a2 2 0 0 0 2-2V9.5" stroke-linecap="round"/>
+      </svg>
+      <span class="word" data-i18n="home.together"></span>
+    </button>
     <form id="site" autocomplete="off">
-      <label class="site" for="site-url">Otro sitio</label>
-      <input id="site-url" type="text" inputmode="url" spellcheck="false"
-        placeholder="Otro sitio: escribe una dirección, p. ej. plex.tv/web">
-      <button class="open" type="submit">Abrir</button>
+      <label class="site" for="site-url" data-i18n="home.other_site"></label>
+      <input id="site-url" type="text" inputmode="url" spellcheck="false" data-i18n-placeholder="home.other_site_placeholder">
+      <button class="open" type="submit" data-i18n="home.open"></button>
     </form>
     <p class="status" id="drm" data-state="checking" aria-live="polite">
       <span class="dot" aria-hidden="true"></span>
-      <span class="text">Comprobando el DRM…</span>
-      <button class="recheck" type="button" id="recheck" hidden>Comprobar de nuevo</button>
+      <span class="text"></span>
+      <button class="recheck" type="button" id="recheck" data-i18n="home.drm_recheck" hidden></button>
     </p>
   </footer>
+
+  <div class="edge" aria-hidden="true" data-i18n-title="home.edge_hint">
+    <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.5L3 5l3.5 3.5"/></svg>
+  </div>
+
+  <div class="waves" aria-hidden="true">
+    <svg class="w1" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 70C100 40 200 40 300 70C400 100 500 100 600 70C700 40 800 40 900 70C1000 100 1100 100 1200 70V120H0Z"/></svg>
+    <svg class="w2" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 82C100 96 200 96 300 82C400 68 500 68 600 82C700 96 800 96 900 82C1000 68 1100 68 1200 82V120H0Z"/></svg>
+    <svg class="w3" viewBox="0 0 1200 120" preserveAspectRatio="none"><path d="M0 98C100 90 200 90 300 98C400 106 500 106 600 98C700 90 800 90 900 98C1000 106 1100 106 1200 98V120H0Z"/></svg>
+  </div>
+
+  <!-- First-run welcome: four short steps, each with a small picture. -->
+  <div class="welcome" id="welcome" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-body">
+      <div class="art" id="welcome-art" aria-hidden="true"></div>
+      <div class="copy">
+        <p class="step-count" id="welcome-count"></p>
+        <h2 id="welcome-title"></h2>
+        <p class="body" id="welcome-body"></p>
+      </div>
+      <div class="steps-nav">
+        <div class="dots" id="welcome-dots" aria-hidden="true"></div>
+        <button class="ghost-button" type="button" id="welcome-skip" data-i18n="home.welcome.skip"></button>
+        <button class="ghost-button" type="button" id="welcome-back" data-i18n="home.welcome.back"></button>
+        <button class="next" type="button" id="welcome-next"></button>
+      </div>
+    </div>
+  </div>
+
+  <template id="art-1">
+    <svg viewBox="0 0 240 110">
+      <rect class="frame" x="62" y="4" width="116" height="102" rx="10"/>
+      <rect class="key-cell" x="72" y="14" width="30" height="26" rx="5"/><rect class="hot" x="72" y="14" width="30" height="26" rx="5"/>
+      <rect class="key-cell" x="105" y="14" width="30" height="26" rx="5"/><rect class="key-cell" x="138" y="14" width="30" height="26" rx="5"/>
+      <rect class="key-cell" x="72" y="43" width="30" height="26" rx="5"/><rect class="key-cell" x="105" y="43" width="30" height="26" rx="5"/>
+      <rect class="key-cell" x="138" y="43" width="30" height="26" rx="5"/><rect class="key-cell" x="72" y="72" width="30" height="26" rx="5"/>
+      <rect class="key-cell" x="105" y="72" width="30" height="26" rx="5"/><rect class="key-cell" x="138" y="72" width="30" height="26" rx="5"/>
+      <text class="dark" x="87" y="32" text-anchor="middle">1</text><text class="ink-dim" x="120" y="32" text-anchor="middle">2</text>
+      <text class="ink-dim" x="153" y="32" text-anchor="middle">3</text><text class="ink-dim" x="87" y="61" text-anchor="middle">4</text>
+      <text class="ink-dim" x="120" y="61" text-anchor="middle">5</text><text class="ink-dim" x="153" y="61" text-anchor="middle">6</text>
+      <text class="ink-dim" x="87" y="90" text-anchor="middle">7</text><text class="ink-dim" x="120" y="90" text-anchor="middle">8</text>
+      <text class="ink-dim" x="153" y="90" text-anchor="middle">9</text>
+      <path class="stroke-hot" d="M30 27h28M50 19l8 8-8 8"/>
+    </svg>
+  </template>
+  <template id="art-2">
+    <svg viewBox="0 0 240 110">
+      <rect class="soft" x="40" y="14" width="160" height="90" rx="8"/>
+      <rect class="frame" x="70" y="24" width="104" height="60" rx="7"/>
+      <path class="hot" d="M115 44v20l17-10z"/>
+      <path class="stroke" d="M122 14V2M116 8l6-6 6 6M122 94v12M116 100l6 6 6-6M60 54H48M54 48l-6 6 6 6M184 54h12M190 48l6 6-6 6"/>
+      <path class="stroke-hot" d="M160 70l14 14M174 74v10h-10"/>
+    </svg>
+  </template>
+  <template id="art-3">
+    <svg viewBox="0 0 240 110">
+      <rect class="frame" x="34" y="8" width="172" height="96" rx="9"/>
+      <path class="soft" d="M46 22h104v54H46z"/>
+      <rect class="frame" x="170" y="18" width="26" height="76" rx="13"/>
+      <circle class="ink-dim" cx="183" cy="32" r="3"/><circle class="ink-dim" cx="183" cy="46" r="3"/>
+      <circle class="hot" cx="183" cy="62" r="7"/><circle class="dark" cx="183" cy="62" r="2.6"/>
+      <circle class="ink-dim" cx="183" cy="80" r="3"/>
+      <path class="ink" d="M214 64l-14 4 5 3-3 7 3 1 3-7 4 4z"/>
+    </svg>
+  </template>
+  <template id="art-4">
+    <svg viewBox="0 0 240 110">
+      <rect class="frame" x="18" y="22" width="96" height="62" rx="8"/>
+      <path class="hot" d="M58 41v24l20-12z"/>
+      <rect class="frame" x="150" y="8" width="70" height="42" rx="6"/><path class="ink-dim" d="M180 21v16l13-8z"/>
+      <rect class="frame" x="150" y="62" width="70" height="42" rx="6"/><path class="ink-dim" d="M180 75v16l13-8z"/>
+      <path class="stroke-hot" d="M118 46c14 0 16-17 28-17M118 60c14 0 16 23 28 23" stroke-dasharray="3 5"/>
+    </svg>
+  </template>
 
 <script id="ytmp-data" type="application/json">__YTMP_DATA__</script>
 <script>
 (() => {
   'use strict';
   const data = JSON.parse(document.getElementById('ytmp-data').textContent);
-  // Canal autenticado que la app solo da a su propia página (webview.rs).
+  // Authenticated channel the app only gives its own page (webview.rs).
   const send = (m) => { if (typeof window.__ytmpHomeSend === 'function') window.__ytmpHomeSend(m); };
-  const guide = document.getElementById('guide');
-  const startup = document.getElementById('startup');
+  const $ = (id) => document.getElementById(id);
+  const guide = $('guide');
   const rows = new Map();
-  let drm = null; // null = sin comprobar; { widevine, playready }
+  let drm = null; // null = not checked yet; { widevine, playready }
 
+  // --- Language -------------------------------------------------------------
+  // Strings come embedded in the page; after a language change the app
+  // sends the new ones (ui.js passes them on as "ytmp:locale").
+  let I18N = data.i18n || { lang: 'en', languages: [], strings: {} };
+  function t(key, args) {
+    let s = I18N.strings[key];
+    if (s === undefined) return key;
+    if (typeof s === 'object') {
+      const n = Number(args && args.count);
+      s = s[Number.isFinite(n) ? new Intl.PluralRules(I18N.lang).select(n) : 'other'] ?? s.other ?? s.many ?? key;
+    }
+    return args ? s.replace(/\{(\w+)\}/g, (m, k) => (k in args ? String(args[k]) : m)) : s;
+  }
+  function applyStatic() {
+    document.documentElement.lang = I18N.lang;
+    for (const node of document.querySelectorAll('[data-i18n]')) node.textContent = t(node.dataset.i18n);
+    for (const attr of ['placeholder', 'aria-label', 'title']) {
+      for (const node of document.querySelectorAll(`[data-i18n-${attr}]`)) {
+        node.setAttribute(attr, t(node.getAttribute(`data-i18n-${attr}`)));
+      }
+    }
+  }
+
+  const langButton = $('lang');
+  const langMenu = $('lang-menu');
+  function renderLanguages() {
+    const current = I18N.languages.find((l) => l.code === I18N.lang);
+    $('lang-name').textContent = current ? current.name : I18N.lang;
+    $('lang-name').lang = I18N.lang;
+    // "Language" in the app's language and in English: whoever opened the
+    // app in a language they cannot read still recognises the button.
+    langButton.title = t('lang.label');
+    langButton.setAttribute('aria-label', `${t('lang.label')}: ${current ? current.name : I18N.lang}`);
+    langMenu.setAttribute('aria-label', t('lang.label'));
+    let names = null;
+    try { names = new Intl.DisplayNames([I18N.lang], { type: 'language' }); } catch (_) { /* older engine */ }
+    langMenu.replaceChildren();
+    for (const language of I18N.languages) {
+      const item = el('button', null);
+      item.type = 'button';
+      item.setAttribute('role', 'menuitemradio');
+      item.setAttribute('aria-checked', String(language.code === I18N.lang));
+      item.dataset.code = language.code;
+      const check = el('span', 'check', '✓');
+      check.setAttribute('aria-hidden', 'true');
+      const native = el('span', 'native', language.name);
+      native.lang = language.code;
+      item.append(check, native);
+      // The name in the current language too ("Polski — Polish"), except
+      // for the current one, where it would say the same thing twice.
+      const local = names && language.code !== I18N.lang ? names.of(language.code) : '';
+      if (local && local.toLowerCase() !== language.name.toLowerCase()) item.append(el('span', 'local', local));
+      item.addEventListener('click', () => chooseLanguage(language.code));
+      langMenu.append(item);
+    }
+  }
+  const menuItems = () => [...langMenu.querySelectorAll('button')];
+  function openMenu() {
+    langMenu.hidden = false;
+    langButton.setAttribute('aria-expanded', 'true');
+    const items = menuItems();
+    (items.find((i) => i.getAttribute('aria-checked') === 'true') || items[0])?.focus();
+  }
+  function closeMenu(focusButton) {
+    if (langMenu.hidden) return;
+    langMenu.hidden = true;
+    langButton.setAttribute('aria-expanded', 'false');
+    if (focusButton) langButton.focus();
+  }
+  function chooseLanguage(code) {
+    closeMenu(true);
+    if (code !== I18N.lang) send('lang:' + code);
+  }
+  langButton.addEventListener('click', () => (langMenu.hidden ? openMenu() : closeMenu(false)));
+  langButton.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openMenu(); }
+  });
+  langMenu.addEventListener('keydown', (e) => {
+    const items = menuItems();
+    const at = items.indexOf(document.activeElement);
+    const go = (i) => { e.preventDefault(); items[(i + items.length) % items.length].focus(); };
+    if (e.key === 'ArrowDown') go(at + 1);
+    else if (e.key === 'ArrowUp') go(at - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(items.length - 1);
+    else if (e.key === 'Escape' || e.key === 'Tab') { if (e.key === 'Escape') e.preventDefault(); closeMenu(e.key === 'Escape'); }
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!langMenu.hidden && !e.target.closest('.lang-box')) closeMenu(false);
+  });
+
+  // --- Services -------------------------------------------------------------
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -158,14 +498,16 @@
     return e;
   }
 
+  const nameOf = (service) => (service.nameKey ? t(service.nameKey) : service.name);
+
   function caption(service) {
     if (service.drm && drm && !drm.widevine && !drm.playready) {
-      return { text: 'Necesita DRM (no disponible aún)', warn: true };
+      return { text: t('home.needs_drm'), warn: true };
     }
-    return { text: service.caption, warn: false };
+    return { text: t(service.captionKey), warn: false };
   }
 
-  // Servicios (teclas 1–8) y, al final, "Mi música" (tecla 9).
+  // Services (keys 1–8) and, last, "My music" (key 9).
   const entries = () => (data.music ? data.services.concat([data.music]) : data.services);
 
   function render() {
@@ -173,34 +515,45 @@
     rows.clear();
     entries().forEach((service, i) => {
       const key = i + 1;
-      const row = el('button', service === data.music ? 'channel wide' : 'channel');
+      const row = el('button', 'key');
       row.type = 'button';
-      row.style.setProperty('--brand', service.accent);
       row.dataset.id = service.id;
-      row.title = `Abrir ${service.name} (tecla ${key})`;
+      row.title = t('home.open_service', { name: nameOf(service), key });
       const cap = caption(service);
       const capEl = el('span', 'caption' + (cap.warn ? ' warn' : ''), cap.text);
-      row.append(el('span', 'num', String(key)), el('span', 'name', service.name), capEl);
-      if (service.id === data.lastService) row.append(el('span', 'last', 'Último'));
+      const name = el('span', 'name');
+      name.append(el('span', null, nameOf(service)));
+      if (cap.warn) {
+        const dot = el('span', 'needs');
+        dot.setAttribute('aria-hidden', 'true');
+        name.append(dot);
+      }
+      const label = el('span', 'label');
+      label.append(name, capEl);
+      const digit = el('span', 'digit', String(key));
+      digit.setAttribute('aria-hidden', 'true');
+      row.append(digit, label);
+      if (service.id === data.lastService) row.append(el('span', 'last', t('home.last')));
       row.addEventListener('click', () => open(service.id));
       guide.append(row);
       rows.set(service.id, { row, capEl, service });
     });
-    startup.setAttribute('aria-checked', String(!!data.startWithLast));
   }
 
   function open(id) {
     const entry = rows.get(id);
     if (!entry) return;
     entry.row.setAttribute('aria-busy', 'true');
-    entry.capEl.textContent = 'Abriendo…';
+    entry.capEl.textContent = t('home.opening');
     send('service:' + id);
   }
 
-  // Teclas 1–9 abren el servicio; no mientras se escribe una dirección.
+  // Keys 1–9 open the service; not while typing an address, choosing a
+  // language or reading the welcome. By physical key, so they work on any
+  // keyboard layout.
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
-    if (e.target instanceof HTMLInputElement) return;
+    if (e.target instanceof HTMLInputElement || !langMenu.hidden || !welcome.hidden) return;
     const match = /^Digit([1-9])$/.exec(e.code) || /^Numpad([1-9])$/.exec(e.code);
     if (!match) return;
     const service = entries()[Number(match[1]) - 1];
@@ -209,32 +562,107 @@
     open(service.id);
   });
 
-  startup.addEventListener('click', () => {
-    data.startWithLast = !data.startWithLast;
-    startup.setAttribute('aria-checked', String(data.startWithLast));
-    send('start-with-last:' + (data.startWithLast ? 1 : 0));
-  });
+  $('settings').addEventListener('click', () => send('settings'));
+  $('together').addEventListener('click', () => send('together'));
 
-  document.getElementById('site').addEventListener('submit', (e) => {
+  $('site').addEventListener('submit', (e) => {
     e.preventDefault();
-    const value = document.getElementById('site-url').value.trim();
+    const value = $('site-url').value.trim();
     if (value) send('open-url:' + value);
   });
 
-  // Estado que la app envía después (ui.js lo reenvía como evento).
+  // State the app sends later (ui.js passes it on as an event).
   window.addEventListener('ytmp:state', (e) => {
     const s = e.detail || {};
     let changed = false;
-    if ('startWithLast' in s && s.startWithLast !== data.startWithLast) { data.startWithLast = s.startWithLast; changed = true; }
+    if ('startWithLast' in s && s.startWithLast !== data.startWithLast) { data.startWithLast = s.startWithLast; }
     if ('lastService' in s && s.lastService !== data.lastService) { data.lastService = s.lastService; changed = true; }
     if (changed) render();
   });
 
-  // --- Comprobación de DRM -----------------------------------------------
-  // Solo pregunta al motor si tiene el módulo; no reproduce nada.
-  const status = document.getElementById('drm');
+  // --- Welcome ---------------------------------------------------------------
+  // The first time (or when asked for from Settings): four short steps.
+  // Skipping or finishing tells the app, which remembers it.
+  const welcome = $('welcome');
+  const STEPS = ['pick', 'move', 'controls', 'together'];
+  let step = 0;
+  let welcomeReturn = null;
+
+  function renderWelcome() {
+    const id = STEPS[step];
+    $('welcome-count').textContent = t('home.welcome.count', { step: step + 1, count: STEPS.length });
+    $('welcome-title').textContent = t('home.welcome.' + id + '.title');
+    // Key names in <kbd>; the rest as text ({F1} → a key cap).
+    const body = $('welcome-body');
+    body.replaceChildren();
+    const textBody = t('home.welcome.' + id + '.body');
+    for (const part of textBody.split(/(\[[^\]]+\])/)) {
+      if (/^\[[^\]]+\]$/.test(part)) body.append(el('kbd', null, part.slice(1, -1)));
+      else if (part) body.append(document.createTextNode(part));
+    }
+    const art = $('welcome-art');
+    art.replaceChildren($('art-' + (step + 1)).content.cloneNode(true));
+    const dots = $('welcome-dots');
+    dots.replaceChildren(...STEPS.map((_, i) => el('span', i === step ? 'on' : null)));
+    $('welcome-back').hidden = step === 0;
+    $('welcome-skip').hidden = step === STEPS.length - 1;
+    $('welcome-next').textContent = t(step === STEPS.length - 1 ? 'home.welcome.done' : 'home.welcome.next');
+  }
+
+  function openWelcome() {
+    step = 0;
+    welcomeReturn = document.activeElement;
+    welcome.hidden = false;
+    renderWelcome();
+    $('welcome-next').focus();
+  }
+
+  function closeWelcome() {
+    if (welcome.hidden) return;
+    welcome.hidden = true;
+    data.welcome = false;
+    send('welcome-done');
+    // Back where the focus was, or on the first service (not lost on the page).
+    const was = welcomeReturn && welcomeReturn.isConnected && welcomeReturn !== document.body ? welcomeReturn : null;
+    const back = was || guide.querySelector('.key');
+    if (back) back.focus();
+  }
+
+  function go(delta) {
+    const next = step + delta;
+    if (next < 0) return;
+    if (next >= STEPS.length) { closeWelcome(); return; }
+    step = next;
+    renderWelcome();
+  }
+
+  $('welcome-next').addEventListener('click', () => {
+    go(1);
+    if (!welcome.hidden) $('welcome-next').focus();
+  });
+  $('welcome-back').addEventListener('click', () => {
+    go(-1);
+    (step === 0 ? $('welcome-next') : $('welcome-back')).focus();
+  });
+  $('welcome-skip').addEventListener('click', closeWelcome);
+  welcome.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeWelcome(); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); go(1); if (!welcome.hidden) $('welcome-next').focus(); return; }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); $('welcome-next').focus(); return; }
+    // The focus stays inside while it is open.
+    if (e.key === 'Tab') {
+      const items = [...welcome.querySelectorAll('button')].filter((b) => !b.hidden);
+      const at = items.indexOf(document.activeElement);
+      e.preventDefault();
+      items[(at + (e.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+    }
+  });
+
+  // --- DRM check --------------------------------------------------------------
+  // Only asks the engine whether it has the module; plays nothing.
+  const status = $('drm');
   const statusText = status.querySelector('.text');
-  const recheck = document.getElementById('recheck');
+  const recheck = $('recheck');
 
   function probe(keySystem, robustness) {
     if (!navigator.requestMediaKeySystemAccess) return Promise.resolve(false);
@@ -248,30 +676,58 @@
     return Promise.race([ask, timeout]);
   }
 
+  // "Widevine and PlayReady", with each language's own "and".
+  function list(items) {
+    try { return new Intl.ListFormat(I18N.lang, { type: 'conjunction' }).format(items); } catch (_) { return items.join(', '); }
+  }
+
+  function showDrm() {
+    if (!drm) {
+      status.dataset.state = 'checking';
+      statusText.textContent = t('home.drm_checking');
+      recheck.hidden = true;
+    } else if (drm.widevine || drm.playready) {
+      status.dataset.state = 'ok';
+      statusText.textContent = t('home.drm_ready', { systems: list([drm.widevine && 'Widevine', drm.playready && 'PlayReady'].filter(Boolean)) });
+      recheck.hidden = true;
+    } else {
+      status.dataset.state = 'missing';
+      statusText.textContent = t('home.drm_missing');
+      recheck.hidden = false;
+    }
+  }
+
   async function checkDrm() {
-    status.dataset.state = 'checking';
-    statusText.textContent = 'Comprobando el DRM…';
-    recheck.hidden = true;
+    drm = null;
+    showDrm();
     const [widevine, playready] = await Promise.all([
       probe('com.widevine.alpha', 'SW_SECURE_CRYPTO'),
       probe('com.microsoft.playready.recommendation', ''),
     ]);
     drm = { widevine, playready };
-    if (widevine || playready) {
-      const which = [widevine && 'Widevine', playready && 'PlayReady'].filter(Boolean).join(' y ');
-      status.dataset.state = 'ok';
-      statusText.textContent = `DRM listo (${which}): los servicios protegidos pueden reproducir.`;
-    } else {
-      status.dataset.state = 'missing';
-      statusText.textContent = 'Sin DRM por ahora: tras instalar, el motor puede tardar unos minutos en descargarlo.';
-      recheck.hidden = false;
-    }
+    showDrm();
     render();
   }
   recheck.addEventListener('click', checkDrm);
 
+  // New language: every text again, without reloading (the DRM check and
+  // what was typed stay).
+  window.addEventListener('ytmp:locale', (e) => {
+    const d = e.detail;
+    if (!d || !d.strings || d.lang === I18N.lang) return;
+    I18N = { lang: d.lang, languages: d.languages || I18N.languages, strings: d.strings };
+    applyStatic();
+    renderLanguages();
+    render();
+    showDrm();
+    if (!welcome.hidden) renderWelcome();
+  });
+
+  applyStatic();
+  renderLanguages();
   render();
   checkDrm();
+  if (data.welcome) openWelcome();
 })();
 </script>
 </body>

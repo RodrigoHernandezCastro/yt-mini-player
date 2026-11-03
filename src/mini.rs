@@ -1,22 +1,23 @@
-//! Barra de música: controles multimedia dentro de la barra de tareas.
+//! Music bar: media controls inside the taskbar.
 //!
-//! - Aparece sola mientras hay un servicio de música abierto (YouTube Music
-//!   y lo que se marque como música en services.rs), esté el reproductor a
-//!   la vista u oculto. Con cualquier otro servicio aparece a petición (clic
-//!   en el icono de la bandeja, atajos multimedia con el reproductor oculto)
-//!   y se esconde sola unos segundos después.
-//! - Se coloca dentro de la barra de tareas, a la izquierda del área de
-//!   notificación, y se puede arrastrar a lo largo de ella (dock.rs). Con la
-//!   barra de tareas vertical, flota junto a la bandeja.
-//! - Se esconde si la barra de tareas se esconde (auto-ocultar) o si hay una
-//!   app a pantalla completa delante, y vuelve cuando reaparece.
-//! - Nunca toma el foco (WS_EX_NOACTIVATE): se puede usar en medio de un
-//!   juego sin sacarlo de primer plano. Por eso se muestra y oculta con
-//!   Win32 directamente: tao siempre activa la ventana al mostrarla.
-//! - Su webview usa el MISMO entorno de WebView2 que el reproductor. Dos
-//!   entornos con opciones distintas sobre la misma carpeta de perfil no
-//!   pueden convivir: WebView2 rechaza el segundo (por eso, hasta la 0.4.1,
-//!   el mini controlador nunca llegaba a aparecer).
+//! - It appears by itself while a music service is open (YouTube Music and
+//!   whatever services.rs marks as music), whether the player is showing or
+//!   hidden. With any other service it appears on request (tray icon click,
+//!   media shortcuts with the player hidden) and hides itself a few seconds
+//!   later.
+//! - It sits inside the taskbar, to the left of the notification area, and
+//!   can be dragged along it (dock.rs). With a vertical taskbar, it floats
+//!   next to the tray.
+//! - It hides if the taskbar hides (auto-hide) or if a fullscreen app is in
+//!   front, and comes back when it reappears.
+//! - It never takes the focus (WS_EX_NOACTIVATE): it can be used in the
+//!   middle of a game without taking it out of the foreground. That is why
+//!   it is shown and hidden with Win32 directly: tao always activates the
+//!   window when showing it.
+//! - Its webview uses the SAME WebView2 environment as the player. Two
+//!   environments with different options on the same profile folder cannot
+//!   coexist: WebView2 rejects the second (which is why, up to 0.4.1, the
+//!   mini controller never appeared).
 
 use std::time::{Duration, Instant};
 
@@ -38,17 +39,18 @@ use crate::{
 };
 
 const URL: &str = "https://ytmp.localhost/mini";
-/// Borde lavanda (el mismo `--lavender-dim` de mini.html).
-const BORDER: (u8, u8, u8) = (0x8f, 0x84, 0xc9);
-/// Separación de los bordes cuando flota (px lógicos).
+/// Window border: the palette's bright teal blue (mini.html draws the same
+/// line itself on Windows 10).
+const BORDER: (u8, u8, u8) = (0x00, 0x77, 0xb6);
+/// Distance from the edges when floating (logical px).
 const FLOAT_MARGIN: f64 = 12.0;
-/// Cada cuánto se revisa la barra de tareas mientras la barra se ve.
+/// How often the taskbar is checked while the bar is showing.
 const TICK: Duration = Duration::from_millis(300);
-/// Mientras está escondida por una app a pantalla completa (o sin barra de
-/// tareas), basta con revisar más despacio.
+/// While hidden by a fullscreen app (or without a taskbar), checking more
+/// slowly is enough.
 const SLOW_TICK: Duration = Duration::from_secs(1);
 
-/// Cuánto tiempo sigue visible (si no es un servicio de música).
+/// How long it stays visible (when it is not a music service).
 pub const STAY_AFTER_CLICK: Duration = Duration::from_secs(6);
 pub const STAY_AFTER_HOTKEY: Duration = Duration::from_millis(2500);
 pub const STAY_AFTER_LEAVE: Duration = Duration::from_millis(1800);
@@ -56,38 +58,41 @@ pub const STAY_AFTER_LEAVE: Duration = Duration::from_millis(1800);
 pub struct Mini {
     window: Window,
     webview: Option<WebView>,
-    /// Windows 10 no colorea bordes: la página dibuja uno propio.
+    /// Windows 10 does not colour borders: the page draws its own.
     css_border: bool,
-    /// Hay un servicio de música abierto: se queda mientras tanto.
+    /// A music service is open: it stays meanwhile.
     pinned: bool,
-    /// Mostrada a petición hasta este momento.
+    /// Shown on request until this moment.
     until: Option<Instant>,
     hovered: bool,
     shown: bool,
     docked: bool,
-    /// Desplazamiento elegido por el usuario (px lógicos hacia la izquierda).
+    /// Offset chosen by the user (logical px to the left).
     shift: i32,
     layout: Option<Layout>,
-    /// Arrastre en curso: (x del cursor, x de la ventana) al empezar.
+    /// Drag in progress: (cursor x, window x) when it started.
     drag: Option<(i32, i32)>,
-    /// Icono de la bandeja, para cuando flota.
+    /// The tray icon, for when it floats.
     anchor: Option<(i32, i32)>,
     next_tick: Option<Instant>,
     media: MediaState,
-    source: Option<&'static str>,
-    /// Dominio de la página cuando no es un servicio conocido (se muestra
-    /// para que nadie pueda hacerse pasar por otra cosa en la barra).
+    source: Option<String>,
+    /// Domain of the page when it is not a known service (shown so nobody
+    /// can pass themselves off as something else in the bar).
     origin: Option<String>,
+    /// The global shortcuts that work on this PC, for the tooltips
+    /// (`next` → `Ctrl+Alt+N`, or `Ctrl+Alt+.` on a Polish keyboard).
+    shortcuts: serde_json::Map<String, serde_json::Value>,
 }
 
 pub fn build_window<T: 'static>(target: &EventLoopWindowTarget<T>) -> Result<Window, OsError> {
     let mut builder = WindowBuilder::new()
-        .with_title("YT Mini Player: barra de música")
+        .with_title(t!("mini.window_title"))
         .with_window_icon(crate::icon::window_icon())
         .with_decorations(false)
         .with_resizable(false)
         .with_visible(false)
-        // Topmost se aplica tras crear el webview (UIAccess, ver app.rs).
+        // Topmost is applied after creating the webview (UIAccess, see app.rs).
         .with_always_on_top(false)
         .with_focusable(false)
         .with_inner_size(LogicalSize::new(dock::WIDTH, dock::FLOAT_HEIGHT));
@@ -96,9 +101,9 @@ pub fn build_window<T: 'static>(target: &EventLoopWindowTarget<T>) -> Result<Win
         use tao::platform::windows::WindowBuilderExtWindows;
         builder = builder
             .with_skip_taskbar(true)
-            // Sin sombra: tao la consigue dejando un marco invisible alrededor
-            // del área cliente, que en esta ventana se veía como un borde
-            // blanco de varios píxeles (taskbar::prepare lo quita del todo).
+            // No shadow: tao gets one by leaving an invisible frame around the
+            // client area, which in this window showed as a white border
+            // several pixels wide (taskbar::prepare removes it completely).
             .with_undecorated_shadow(false)
             .with_drag_and_drop(false)
             .with_window_classname("YtMiniPlayerControls");
@@ -125,7 +130,12 @@ impl Mini {
             media: MediaState::default(),
             source: None,
             origin: None,
+            shortcuts: serde_json::Map::new(),
         }
+    }
+
+    pub fn set_shortcuts(&mut self, shortcuts: serde_json::Map<String, serde_json::Value>) {
+        self.shortcuts = shortcuts;
     }
 
     pub fn id(&self) -> WindowId {
@@ -151,7 +161,7 @@ impl Mini {
         0
     }
 
-    /// Crea el webview la primera vez que hace falta.
+    /// Creates the webview the first time it is needed.
     pub fn ensure_webview(
         &mut self,
         main: &WebView,
@@ -166,14 +176,14 @@ impl Mini {
         let home_state = home_state.clone();
         let mut builder = WebViewBuilder::new_with_web_context(web_context)
             .with_url(URL)
-            .with_background_color((16, 21, 42, 255))
+            .with_background_color((3, 4, 94, 255))
             .with_custom_protocol("ytmp".into(), move |_id, request| home::respond(&request, &home_state))
             .with_ipc_handler(move |request: Request<String>| {
                 if let Some(command) = ipc::parse_mini(request.body()) {
                     let _ = proxy.send_event(UserEvent::Command(command));
                 }
             })
-            // Fija la página: ni enlaces, ni ventanas, ni descargas, ni permisos.
+            // Pins the page: no links, windows, downloads or permissions.
             .with_navigation_handler(|url| url == URL)
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_download_started_handler(|_, _| false)
@@ -183,9 +193,9 @@ impl Mini {
             use wry::{WebViewBuilderExtWindows, WebViewExtWindows};
             builder = builder
                 .with_environment(main.environment())
-                // Por si acaso: las mismas opciones de entorno que el reproductor.
+                // Just in case: the same environment options as the player.
                 .with_browser_extensions_enabled(true)
-                .with_additional_browser_args(crate::webview::BROWSER_ARGS)
+                .with_additional_browser_args(crate::webview::browser_args())
                 .with_https_scheme(true)
                 .with_default_context_menus(false);
         }
@@ -195,8 +205,8 @@ impl Mini {
             Ok(webview) => {
                 crate::webview::harden(&webview);
                 self.webview = Some(webview);
-                // Ahora sí: siempre encima (antes, WebView2 falla con UIAccess).
-                // Va antes de `prepare`: tao reescribe los estilos al cambiarlo.
+                // Now: always on top (before, WebView2 fails with UIAccess).
+                // Before `prepare`: tao rewrites the styles when it changes.
                 self.window.set_always_on_top(true);
                 let hwnd = self.hwnd();
                 taskbar::prepare(hwnd);
@@ -206,7 +216,7 @@ impl Mini {
                 true
             }
             Err(err) => {
-                eprintln!("no se pudo crear la barra de música: {err}");
+                eprintln!("could not create the music bar: {err}");
                 false
             }
         }
@@ -216,7 +226,7 @@ impl Mini {
         self.pinned = pinned;
     }
 
-    /// La muestra a petición durante `stay` (o más, si ya estaba pedida).
+    /// Shows it on request for `stay` (or longer, if already requested).
     pub fn show_for(&mut self, stay: Duration, anchor: Option<(i32, i32)>) {
         if anchor.is_some() {
             self.anchor = anchor;
@@ -225,7 +235,7 @@ impl Mini {
         self.until = Some(self.until.map_or(at, |current| current.max(at)));
     }
 
-    /// Termina lo pedido a petición (la de un servicio de música sigue).
+    /// Ends the on-request showing (a music service keeps it).
     pub fn end_transient(&mut self) {
         self.until = None;
     }
@@ -241,8 +251,8 @@ impl Mini {
         self.pinned || self.until.is_some_and(|at| now < at) || (self.hovered && self.shown) || self.drag.is_some()
     }
 
-    /// Decide si se ve y dónde. Se llama tras cualquier cambio y cada `TICK`
-    /// mientras se quiere ver.
+    /// Decides whether it shows and where. Called after any change and every
+    /// `TICK` while it should show.
     pub fn update(&mut self, now: Instant) {
         if self.until.is_some_and(|at| now >= at) {
             self.until = None;
@@ -262,7 +272,7 @@ impl Mini {
         match dock::place(&info, taskbar::fullscreen_in_front(info.monitor)) {
             Placement::Docked(layout) => {
                 self.layout = Some(layout);
-                // Durante el arrastre manda la posición actual, no la guardada.
+                // While dragging, the current position wins over the saved one.
                 let rect = match (self.drag, taskbar::window_rect(hwnd)) {
                     (Some(_), Some(current)) if self.shown => {
                         let width = current.right - current.left;
@@ -287,7 +297,7 @@ impl Mini {
         }
     }
 
-    /// Sin barra de tareas horizontal: flota junto a la bandeja.
+    /// Without a horizontal taskbar: it floats next to the tray.
     fn float(&mut self) {
         self.layout = None;
         self.drag = None;
@@ -333,7 +343,7 @@ impl Mini {
         self.drag = None;
     }
 
-    /// Cierre explícito (clic derecho, salir).
+    /// Explicit close (right click, exit).
     pub fn close(&mut self) {
         self.until = None;
         self.drag = None;
@@ -351,8 +361,8 @@ impl Mini {
         }
     }
 
-    /// Arrastre a lo largo de la barra de tareas. Al soltar devuelve el
-    /// nuevo desplazamiento, para guardarlo.
+    /// Dragging along the taskbar. On release it returns the new offset, to
+    /// save it.
     pub fn drag(&mut self, phase: DragPhase) -> Option<i32> {
         let hwnd = self.hwnd();
         let Some(layout) = self.layout.filter(|_| self.shown && self.docked) else {
@@ -385,8 +395,17 @@ impl Mini {
         }
     }
 
-    /// Guarda lo que suena y, si se ve, lo manda a la página.
-    pub fn set_media(&mut self, media: &MediaState, source: Option<&'static str>, origin: Option<String>) {
+    /// After a language change: the window title and the page (served again
+    /// with the new strings; it asks for the state when it loads).
+    pub fn relocalize(&self) {
+        self.window.set_title(&t!("mini.window_title"));
+        if let Some(webview) = &self.webview {
+            let _ = webview.load_url(URL);
+        }
+    }
+
+    /// Keeps what is playing and, if it shows, sends it to the page.
+    pub fn set_media(&mut self, media: &MediaState, source: Option<String>, origin: Option<String>) {
         self.media = media.clone();
         self.source = source;
         self.origin = origin;
@@ -395,7 +414,7 @@ impl Mini {
         }
     }
 
-    /// Envía el estado a la página de la barra.
+    /// Sends the state to the bar's page.
     pub fn push(&self) {
         let Some(webview) = &self.webview else { return };
         #[derive(serde::Serialize)]
@@ -406,13 +425,15 @@ impl Mini {
             docked: bool,
             source: Option<&'a str>,
             origin: Option<&'a str>,
+            shortcuts: &'a serde_json::Map<String, serde_json::Value>,
         }
         let payload = Payload {
             media: &self.media,
             css_border: self.css_border,
             docked: self.docked,
-            source: self.source,
+            source: self.source.as_deref(),
             origin: self.origin.as_deref(),
+            shortcuts: &self.shortcuts,
         };
         if let Ok(json) = serde_json::to_string(&payload) {
             let _ = webview.evaluate_script(&format!("window.__ytmpMini && window.__ytmpMini({json})"));

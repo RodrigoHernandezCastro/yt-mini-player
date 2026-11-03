@@ -1,4 +1,4 @@
-# Avisos semanales de dependencias nuevas (y de seguridad, en cuanto salen).
+# Weekly notices of new dependency versions (and security ones as soon as they come out).
 version: 2
 updates:
   - package-ecosystem: cargo
