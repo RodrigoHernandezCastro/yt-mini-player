@@ -451,7 +451,18 @@ pub fn find_duplicates(library: &Library, mut same_audio: impl FnMut(&Track, &Tr
 
 /// A file name that is safe on Windows (no forbidden characters, reserved
 /// names or trailing dots or spaces) and of reasonable length.
+///
+/// The fallback is cleaned the same way: it often comes from the network
+/// (an Archive file name), and a raw `C:\…` or `\\server\…` there would make
+/// `Path::join` drop the download folder altogether.
 pub fn safe_file_name(text: &str, fallback: &str) -> String {
+    clean_file_name(text)
+        .or_else(|| clean_file_name(fallback))
+        .unwrap_or_else(|| "untitled".to_owned())
+}
+
+/// One path component, or `None` if nothing usable is left.
+fn clean_file_name(text: &str) -> Option<String> {
     let cleaned: String = text
         .chars()
         .map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
@@ -459,14 +470,13 @@ pub fn safe_file_name(text: &str, fallback: &str) -> String {
     let mut name: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     name = name.chars().take(100).collect();
     let name = name.trim_end_matches(['.', ' ']).trim_start().to_owned();
-    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit());
-    if name.is_empty() || reserved || name.chars().all(|c| c == '_') {
-        fallback.to_owned()
-    } else {
-        name
-    }
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    // Device names, with or without an extension (`COM¹` counts too).
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.chars().count() == 4
+            && stem.chars().last().is_some_and(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³')));
+    (!name.is_empty() && !reserved && !name.chars().all(|c| c == '_')).then_some(name)
 }
 
 #[cfg(test)]
@@ -625,5 +635,27 @@ mod tests {
         assert_eq!(safe_file_name("   ", "x"), "x");
         assert_eq!(safe_file_name("a\u{0}b\nc", "x"), "a_b_c");
         assert_eq!(safe_file_name(&"á".repeat(300), "x").chars().count(), 100);
+        assert_eq!(safe_file_name("COM¹", "x"), "x");
+        assert_eq!(safe_file_name("nul .txt", "x"), "x");
+    }
+
+    #[test]
+    fn fallbacks_are_cleaned_too() {
+        // A title that cleans down to nothing falls back to the Archive's
+        // file name, which must not become an absolute path or a traversal.
+        for (fallback, want) in [
+            ("C:\\Windows\\System32\\x.mp3", "C__Windows_System32_x.mp3"),
+            ("\\\\server\\share\\x.mp3", "__server_share_x.mp3"),
+            ("../../etc/passwd", ".._.._etc_passwd"),
+            ("Disc 1/01 Song.mp3", "Disc 1_01 Song.mp3"),
+        ] {
+            let name = safe_file_name("CON", fallback);
+            assert_eq!(name, want, "{fallback}");
+            let base = std::path::Path::new("C:\\Music");
+            assert_eq!(base.join(&name).parent(), Some(base), "{fallback}: one component under the folder");
+        }
+        for unusable in ["", "..", ".", "   ", "___", "CON", "lpt1.mp3"] {
+            assert_eq!(safe_file_name("", unusable), "untitled", "{unusable:?}");
+        }
     }
 }

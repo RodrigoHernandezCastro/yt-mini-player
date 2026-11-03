@@ -136,9 +136,13 @@ pub struct Hit {
     pub year: String,
 }
 
-/// An Archive identifier: letters, digits, `.`, `-` and `_`.
+/// An Archive identifier: letters, digits, `.`, `-` and `_`, not starting
+/// with a dot (it names a folder when an album has no title: never `.` or
+/// `..`).
 pub fn is_identifier(id: &str) -> bool {
-    (1..=100).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    (1..=100).contains(&id.len())
+        && !id.starts_with('.')
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 pub fn parse_search(json: &Value) -> (u64, Vec<Hit>) {
@@ -277,10 +281,14 @@ pub fn parse_item(json: &Value, best: bool) -> Result<Item, Message> {
     let files = json["files"].as_array().cloned().unwrap_or_default();
 
     // Groups derivatives with their original: the key is the original's name.
+    // An index keeps it linear (big items list thousands of files).
     let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for f in &files {
         let name = text(&f["name"]);
-        if name.is_empty() || name.contains("..") || name.starts_with('/') {
+        // The Archive separates folders with '/': a backslash or a drive
+        // letter is never a real file name there.
+        if name.is_empty() || name.contains("..") || name.starts_with('/') || name.contains('\\') || name.contains(':') {
             continue;
         }
         let Some(_) = audio_format(&text(&f["format"]), &name) else { continue };
@@ -288,9 +296,12 @@ pub fn parse_item(json: &Value, best: bool) -> Result<Item, Message> {
             "derivative" => text(&f["original"]),
             _ => name.clone(),
         };
-        match groups.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, members)) => members.push(f),
-            None => groups.push((key, vec![f])),
+        match index.get(&key) {
+            Some(&i) => groups[i].1.push(f),
+            None => {
+                index.insert(key.clone(), groups.len());
+                groups.push((key, vec![f]));
+            }
         }
     }
     let mut tracks: Vec<RemoteTrack> = groups
@@ -446,6 +457,8 @@ pub mod tests {
             { "name": "TAM033-Ronan_Dec_archive.torrent", "source": "metadata", "format": "Archive BitTorrent", "size": "4059" },
             { "name": "TAM033-Ronan_Dec_meta.xml", "source": "metadata", "format": "Metadata", "size": "818" },
             { "name": "../../etc/passwd.mp3", "source": "original", "format": "VBR MP3", "size": "1" },
+            { "name": "C:\\Users\\Public\\x.mp3", "source": "original", "format": "VBR MP3", "size": "1" },
+            { "name": "sub\\x.mp3", "source": "original", "format": "VBR MP3", "size": "1" },
             { "name": "__ia_thumb.jpg", "source": "original", "format": "Item Tile", "size": "27632" }
           ]
         })
@@ -541,6 +554,7 @@ pub mod tests {
         assert_eq!(metadata_url(BASE, "TFN147"), "https://archive.org/metadata/TFN147");
         assert_eq!(thumbnail_url(BASE, "TFN147"), "https://archive.org/services/img/TFN147");
         assert!(is_identifier("TAM033-Ronan_Dec") && !is_identifier("a/b") && !is_identifier(""));
+        assert!(is_identifier("v1.0_live") && !is_identifier("..") && !is_identifier(".") && !is_identifier(".hidden"));
         assert_eq!(natural_cmp("Track 2", "Track 10"), std::cmp::Ordering::Less);
     }
 }
