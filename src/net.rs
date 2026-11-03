@@ -100,6 +100,10 @@ impl Http {
             .timeout_read(Duration::from_secs(30))
             .timeout_write(Duration::from_secs(30))
             .redirects(5)
+            // Never plain http, not even after a redirect (a downgrade would
+            // let anyone on the network change the metadata or the license
+            // answers). The tests' local server is the only exception.
+            .https_only(!cfg!(test))
             .user_agent(USER_AGENT);
         #[cfg(windows)]
         let builder = {
