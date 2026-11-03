@@ -137,6 +137,21 @@ fn special_text(key: &str) -> Option<&'static str> {
     }
 }
 
+/// The same keys by name (`key` or `code`), whatever virtual key comes
+/// with them: the page sees the names, and an injected key is trusted, so
+/// `{"key":"F11","kc":0}` would otherwise reach the app's own F11 and F1
+/// shortcuts (ui.js) or a site's media keys. Shift alone stays: it does
+/// nothing by itself (the modifier travels as a flag).
+fn blocked_name(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "Meta", "OS", "Super", "Hyper", "Control", "Alt", "ContextMenu", "Fn", "Browser", "Media", "Launch", "Audio",
+        "Volume", "Power", "Sleep", "WakeUp", "Eject", "Help", "Print", "Props", "Select", "Open", "Find", "Again",
+        "Undo", "Copy", "Paste", "Cut",
+    ];
+    let function_key = (2..=3).contains(&name.len()) && name.starts_with('F') && name[1..].bytes().all(|b| b.is_ascii_digit());
+    function_key || PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
 fn valid_code(code: &str) -> bool {
     code.len() <= 24 && code.bytes().all(|b| b.is_ascii_alphanumeric())
 }
@@ -284,11 +299,15 @@ impl Remote {
         now: Instant,
     ) -> Option<Vec<(&'static str, Value)>> {
         let chars = key.chars().count();
-        if chars == 0 || chars > 24 || !valid_code(code) || blocked_key(vk) {
+        if chars == 0 || chars > 24 || !valid_code(code) || blocked_key(vk) || blocked_name(code) {
             return None;
         }
         // A printable character: one, not a control character.
         let printable = chars == 1 && !key.chars().any(char::is_control);
+        // Named keys ("Enter", "F11"…) are checked by name too.
+        if !printable && blocked_name(key) {
+            return None;
+        }
         // AltGr (Ctrl+Alt on Windows) types characters like @ or € on many
         // keyboards: those go through as the character alone.
         let altgr = ctrl && alt && !meta && printable;
@@ -477,6 +496,18 @@ mod tests {
         let win_r = held("down", "r", "KeyR", 82, (false, false, true));
         for blocked in [ctrl_w, alt_f4, win_r, key("down", "F5", "F5", 116), key("down", "F12", "F12", 123), key("down", "BrowserBack", "BrowserBack", 166), key("down", "Meta", "MetaLeft", 91)] {
             assert_eq!(remote.translate("g1", &blocked, VIEW, false, now), Outcome::Dropped, "{blocked:?}");
+        }
+        // The names count too, whatever virtual key comes with them (the
+        // page, and the app's own F11 / F1 shortcuts, see the names).
+        for (k, code) in [
+            ("F11", "F11"), ("F1", ""), ("a", "F5"), ("MediaPlayPause", ""), ("BrowserBack", ""), ("AudioVolumeMute", ""),
+            ("Meta", ""), ("ContextMenu", "ContextMenu"), ("Control", "ControlLeft"), ("Alt", "AltLeft"), ("x", "MetaLeft"),
+        ] {
+            assert_eq!(remote.translate("g1", &key("down", k, code, 0), VIEW, false, now), Outcome::Dropped, "{k} {code}");
+        }
+        for (k, code, vk) in [("F", "KeyF", 70), ("Escape", "Escape", 27), ("Home", "Home", 36), ("Delete", "Delete", 46), ("Tab", "Tab", 9)] {
+            assert!(matches!(remote.translate("g1", &key("down", k, code, vk), VIEW, false, now), Outcome::Dispatch(_)), "{k}");
+            calls(remote.translate("g1", &key("up", k, code, vk), VIEW, false, now));
         }
         // AltGr+Q = @ on a Spanish or German keyboard.
         let at = held("down", "@", "KeyQ", 81, (true, true, false));
