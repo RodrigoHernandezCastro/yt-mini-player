@@ -112,6 +112,16 @@ fn query_key(query: Option<&str>) -> Option<String> {
     url::form_urlencoded::parse(query?.as_bytes()).find(|(k, _)| k == "k").map(|(_, v)| v.into_owned())
 }
 
+/// Does the request carry this session's key, and not from another site?
+/// No disk involved: the protocol handler asks before it gives a request a
+/// thread, so a page without the key cannot make the app start any.
+pub fn authorized(query: Option<&str>, headers: &HeaderMap) -> bool {
+    let Some(shared) = shared() else { return false };
+    let key = query_key(query).is_some_and(|k| constant_time_eq(&k, &shared.key));
+    let cross_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()).is_some_and(|v| v == "cross-site");
+    key && !cross_site
+}
+
 /// Is it a music path? If so, the response.
 pub fn respond(path: &str, query: Option<&str>, headers: &HeaderMap) -> Option<Reply> {
     let (kind, name) = match path.strip_prefix("/media/") {
@@ -119,9 +129,7 @@ pub fn respond(path: &str, query: Option<&str>, headers: &HeaderMap) -> Option<R
         None => ("cover", path.strip_prefix("/cover/")?),
     };
     let Some(shared) = shared() else { return Some(status(StatusCode::NOT_FOUND)) };
-    let authorized = query_key(query).is_some_and(|k| constant_time_eq(&k, &shared.key));
-    let cross_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()).is_some_and(|v| v == "cross-site");
-    if !authorized || cross_site {
+    if !authorized(query, headers) {
         return Some(status(StatusCode::FORBIDDEN));
     }
     Some(match kind {
@@ -229,6 +237,9 @@ mod tests {
         let mut cross = HeaderMap::new();
         cross.insert("sec-fetch-site", "cross-site".parse().unwrap());
         assert_eq!(respond(&format!("/media/{id}"), key, &cross).unwrap().status(), StatusCode::FORBIDDEN);
+        // What the protocol handler asks before it starts a thread.
+        assert!(authorized(key, &none));
+        assert!(!authorized(None, &none) && !authorized(Some("k=other"), &none) && !authorized(key, &cross));
         for bad in ["/media/../../etc/passwd", "/media/C:%5CWindows", "/media/ffffffffffffffff", "/cover/../vault.key"] {
             assert_eq!(respond(bad, key, &none).unwrap().status(), StatusCode::NOT_FOUND, "{bad}");
         }

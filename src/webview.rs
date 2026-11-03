@@ -181,11 +181,25 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
         // script guard themselves by checking `window.top`.
         .with_initialization_script(bundle(POST_EXPR, &keys))
         .with_initialization_script(MAINTENANCE_JS)
-        // Asynchronous: songs are read from disk on another thread.
+        // Asynchronous: songs and covers are read from disk off the window's
+        // thread (covers on a few threads of their own: the library asks for
+        // dozens at once). Only requests with this session's key get a
+        // thread; the rest are answered at once (403), so another site
+        // cannot make the app start threads by the thousand.
         .with_asynchronous_custom_protocol(HOME_PROTOCOL.into(), move |_id, request, responder| {
-            if request.uri().path().starts_with("/media/") {
+            let path = request.uri().path();
+            let (media, cover) = (path.starts_with("/media/"), path.starts_with("/cover/"));
+            if (media || cover) && crate::music::serve::authorized(request.uri().query(), request.headers()) {
                 let home_state = home_state.clone();
-                std::thread::spawn(move || responder.respond(home::respond(&request, &home_state)));
+                let job = move || responder.respond(home::respond(&request, &home_state));
+                if media {
+                    // A song's chunk: its own thread, never behind a queue of covers.
+                    if let Err(err) = std::thread::Builder::new().name("media".into()).spawn(job) {
+                        eprintln!("could not start a thread for a song: {err}");
+                    }
+                } else {
+                    on_cover_thread(job);
+                }
             } else {
                 responder.respond(home::respond(&request, &home_state));
             }
@@ -263,6 +277,49 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
     let webview = builder.build(window)?;
     harden(&webview);
     Ok(webview)
+}
+
+/// Threads that read covers for the music page.
+const COVER_THREADS: usize = 3;
+
+/// Runs `job` on one of a few threads kept for covers: the rest wait their
+/// turn instead of each getting a thread. If none could be started, it runs
+/// here (slower, but the page still gets its pictures).
+fn on_cover_thread(job: impl FnOnce() + Send + 'static) {
+    use std::sync::{mpsc, OnceLock};
+    type Job = Box<dyn FnOnce() + Send>;
+    static QUEUE: OnceLock<Option<mpsc::Sender<Job>>> = OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
+        let mut started = 0;
+        for n in 0..COVER_THREADS {
+            let rx = rx.clone();
+            let worker = move || loop {
+                // The lock is only held while waiting for the next job.
+                let next = match rx.lock() {
+                    Ok(rx) => rx.recv(),
+                    Err(_) => return,
+                };
+                match next {
+                    Ok(job) => job(),
+                    Err(_) => return,
+                }
+            };
+            if std::thread::Builder::new().name(format!("covers-{n}")).spawn(worker).is_ok() {
+                started += 1;
+            }
+        }
+        (started > 0).then_some(tx)
+    });
+    match queue {
+        Some(tx) => {
+            if let Err(mpsc::SendError(job)) = tx.send(Box::new(job)) {
+                job();
+            }
+        }
+        None => job(),
+    }
 }
 
 /// Permissions: everything a player does not need is denied. DRM does not
