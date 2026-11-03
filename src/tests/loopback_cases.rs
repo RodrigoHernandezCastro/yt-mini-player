@@ -15,7 +15,7 @@ fn frame(sample: Sample, channels: usize, value: f32) -> Vec<u8> {
 }
 
 fn samples(bytes: &[u8]) -> Vec<i16> {
-    bytes.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect()
+    bytes.as_chunks::<2>().0.iter().map(|&s| i16::from_le_bytes(s)).collect()
 }
 
 /// What a constant level becomes after folding `channels` into stereo.

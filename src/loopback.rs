@@ -170,7 +170,7 @@ impl Levels {
 
 /// The loudest sample of a piece (s16le).
 fn loudest(bytes: &[u8]) -> u16 {
-    bytes.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs()).max().unwrap_or(0)
+    bytes.as_chunks::<2>().0.iter().map(|&s| i16::from_le_bytes(s).unsigned_abs()).max().unwrap_or(0)
 }
 
 /// How often the app asks whether the sound is heard.
@@ -816,7 +816,7 @@ mod tests {
     }
 
     fn samples(bytes: &[u8]) -> Vec<i16> {
-        bytes.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect()
+        bytes.as_chunks::<2>().0.iter().map(|&s| i16::from_le_bytes(s)).collect()
     }
 
     #[test]

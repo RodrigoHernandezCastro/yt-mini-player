@@ -120,7 +120,7 @@ pub fn decode(text: &str) -> Option<Vec<u32>> {
     if bytes.len() % 4 != 0 {
         return None;
     }
-    Some(bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Some(bytes.as_chunks::<4>().0.iter().map(|&c| u32::from_le_bytes(c)).collect())
 }
 
 #[cfg(test)]
