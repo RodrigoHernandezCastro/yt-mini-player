@@ -1,4 +1,4 @@
-﻿YT Mini Player 0.13.2
+﻿YT Mini Player 0.13.3
 ====================
 
 A floating player for Windows 10/11: YouTube, YouTube Music, Netflix,

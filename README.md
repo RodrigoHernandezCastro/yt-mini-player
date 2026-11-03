@@ -12,12 +12,12 @@ five friends see and hear your window (and can use it, if you let them), or thei
 follow yours.
 
 Built with Rust, [tao](https://crates.io/crates/tao) and [wry](https://crates.io/crates/wry).
-Version 0.11.1. The interface is in **English, Spanish, Russian, Polish and Japanese** (see
+Version 0.13.3. The interface is in **English, Spanish, Russian, Polish and Japanese** (see
 [Languages](#languages)).
 
 ## Install
 
-1. Download `YT-Mini-Player-0.11.1-win64.zip` from the Releases page and extract it anywhere.
+1. Download `YT-Mini-Player-0.13.3-win64.zip` from the Releases page and extract it anywhere.
 2. Pick one:
    - **`Install.cmd`** (normal): copies the app to `%LOCALAPPDATA%\Programs\YT Mini Player`,
      adds Start menu and desktop shortcuts, and launches it. No admin rights needed.
@@ -497,7 +497,8 @@ pages (and the signed-in sessions) it runs on. So each extension gets a **SHA-25
 of its whole content and only loads after you approve it in a Windows dialog that lists its
 permissions and warns if it can read every site. If a single byte changes, it asks again.
 Rejected ones stay off until you press **Reload**. Archives are capped at 10,000 files and
-256 MB unpacked (zip-bomb protection).
+256 MB unpacked (zip-bomb protection), and so are extension folders: sizes are checked before
+anything is read.
 
 WebView2 limitations: no Chrome Web Store, no extension toolbar and no popup windows, so you need
 to obtain the `.crx`/`.zip` yourself (many extensions publish them on GitHub). Manifest V2
@@ -518,8 +519,9 @@ yours is too old.
   scheme as Chrome's `os_crypt`, Electron's `safeStorage` and Signal Desktop. A random 256-bit
   data key encrypts each file (settings, window position, extension ids and approvals, the PIN
   hash, the music library and license) with **AES-256-GCM**; each file has a random nonce and is
-  bound to its purpose, so a modified or swapped file is rejected. The data key is wiped from
-  memory after use (`zeroize`) and is only stored wrapped twice:
+  bound to its purpose, so a modified or swapped file is rejected. Each file reaches the disk
+  before it replaces the old one, so a power cut can't leave it half written or empty. The data
+  key is wiped from memory after use (`zeroize`) and is only stored wrapped twice:
   - by the computer's **security chip (TPM 2.0)**, through Windows' *Microsoft Platform Crypto
     Provider*: a non-exportable RSA-2048 key generated inside the TPM (OAEP padding), the way
     Windows Hello protects its keys. A copy of the disk can't be opened on another computer, even
@@ -549,7 +551,8 @@ Tray → Security:
 - **Lock with a PIN…**: at least 6 characters, no repeats (111111) or runs (123456). Only
   an **Argon2id** hash is kept (64 MiB, 3 passes, random salt; OWASP's recommended password KDF),
   inside the encrypted vault. After 5 wrong attempts each further one doubles the wait (30 s,
-  1 min, … up to 15 min), and the counter survives restarts. **Forgot it?** The lock screen can
+  1 min, … up to 15 min), and the counter survives restarts. Changing the Windows clock neither
+  shortens the wait nor stretches it past 15 minutes. **Forgot it?** The lock screen can
   remove the PIN after verifying you with Windows Hello; without Hello, the only way out is to
   sign out of every service first (so whoever doesn't know the PIN gets nothing).
 - The app locks on start, when Windows locks (Win+L, switch user), on sleep, after 10 minutes
@@ -574,13 +577,16 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
   Plex/Jellyfin-style servers), no `file:`, custom protocols or other schemes, and extension
   pages only for installed extensions.
 - **New windows** from a catalog service or a sign-in provider open in the same window;
-  anything else opens in your default browser (at most one every 2 s).
+  anything else opens in your default browser (at most one every 2 s). Only plain `http(s)`
+  addresses are ever handed to the browser, and the app's folder buttons only open folders:
+  Windows is never asked to run a file or a custom protocol.
 - **Downloads are blocked.** **Permissions are denied** (camera, microphone, location,
   notifications, clipboard reading, file system, screen capture…); autoplay is allowed.
 - **SmartScreen is on** (wry turns it off by default; with "Another site" any site can be opened).
   Tracking prevention is set to *balanced*.
 - **The music bar shows the domain** of pages outside the catalog, so a site can't pass itself
-  off as something else down there.
+  off as something else down there. Titles lose control and text-direction characters, so they
+  can't be made to read backwards either.
 - The start page, music bar and lock screen are served with a strict Content-Security-Policy,
   `no-referrer` and `X-Content-Type-Options: nosniff`, and the bar and lock screen can't navigate
   away from their page.
@@ -590,9 +596,14 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
   ids validated; the app pushes data to it only after checking, inside the page, that it is that
   page. Songs and covers are served by id (never by a path from the URL) and require a random
   per-session key, so another site open in the player can't read your files; cross-site requests
-  are refused. Library, fingerprints and license are stored in the encrypted vault.
-- **Network (My music):** HTTPS through Windows' own TLS stack (SChannel, TLS 1.2+, the system's
-  certificates; verification is never turned off), a descriptive User-Agent, few parallel
+  are refused, and a request without the key gets no thread. Songs and covers are read off the
+  window's thread. Library, fingerprints and license are stored in the encrypted vault.
+  Downloaded files get names made safe for Windows (no reserved names, separators or drive
+  letters, also in the Archive's own file names), so they always land inside
+  `Music\YT Mini Player`.
+- **Network (My music):** HTTPS only, never plain http (not even after a redirect), through
+  Windows' own TLS stack (SChannel, TLS 1.2+, the system's certificates; verification is never
+  turned off), a descriptive User-Agent, few parallel
   downloads and back-off with `Retry-After`, as the Internet Archive asks. Lemon Squeezy keys
   are checked against **this store and these products** (the license API accepts keys from any
   store).
@@ -613,7 +624,8 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
   messages from that one address (like My music's). Offers and answers are checked (printable
   SDP, bounded size), and ICE servers too (only `stun:`/`turn:`/`turns:`, bounded).
 - Remote control is filtered in the host's app (see above): the guest's page can send anything,
-  and only what makes sense on a web page, where the host allowed it, gets through.
+  and only what makes sense on a web page, where the host allowed it, gets through. Keys are
+  checked by their code and by their name, so an F key can't come in disguised as another one.
 - The app connects with Windows' TLS (SChannel, TLS 1.2+); `ws://` is only accepted for a relay
   on this computer.
 - The window is another pinned page with its own closed protocol (`together:…`) and the app's
@@ -705,6 +717,27 @@ cross-compiled from Linux with MinGW (GNU target), so it ships the redistributab
 `WebView2Loader.dll` next to the executables.
 
 ## Changelog
+
+**0.13.3** — security hardening, no more lost vault on a power cut
+(release notes: [`docs/releases/0.13.3.md`](docs/releases/0.13.3.md), with everything since 0.7.0)
+- **Downloads stay inside `Music\YT Mini Player`:** a title that cleaned down to nothing (or to
+  a reserved name such as `CON`) fell back to the Internet Archive's raw file name, and a name
+  like `C:\…` could place the file elsewhere. Fallbacks are cleaned too, Archive file names with
+  `\` or `:` are ignored, and item ids can't start with a dot.
+- **Watch together:** keys a guest sends are checked by name as well as by code, so F11, F1,
+  media and browser keys can't come in disguised (the page, and the app's own shortcuts, read
+  the name).
+- **App lock:** moving the clock forward no longer skips the wait after wrong PINs, and moving it
+  back no longer locks the PIN for longer than 15 minutes (a monotonic clock while the app runs).
+- Only plain `http(s)` addresses reach the default browser, and folder buttons only open folders;
+  My music never uses plain http, not even after a redirect; titles lose text-direction
+  characters; extension folders are checked by size before anything is read; media requests
+  without the session key get no thread; the relay hashes before it touches a room.
+- **Fixed:** encrypted files (and `vault.key`) are flushed to disk before they replace the old
+  ones, so a power cut right after saving can't empty them; covers load off the window's thread;
+  a language switch no longer re-hashes every extension; big Archive items parse in linear time.
+- `npm test` for the relay works on Windows and always stops `wrangler` and `workerd`; clippy is
+  clean on Rust 1.98.
 
 **0.13.2** — about 5,800 new tests
 - **2,032 generated Rust tests** (`src/tests/`, written by `tests/gen/`): every message the pages
@@ -1026,6 +1059,7 @@ cross-compiled from Linux with MinGW (GNU target), so it ships the redistributab
 | `dist/` | Installer (`install.ps1`, `Install.cmd`, `Install-overlay.cmd`, `Uninstall.cmd`, `README.txt`, `ANTIVIRUS.txt`) |
 | `tools/` | `measure.ps1` (memory and CPU), `package.ps1` (packaging), `sign.ps1` (Authenticode), `check-release-exe.ps1` (refuses the test build) |
 | `docs/SIGNING.md` | Signing the releases: certificates that fit, CI and local steps, antivirus false positives |
+| `docs/releases/` | Release notes, one file per version (what the GitHub release page shows) |
 | `tests/` | Browser suites (`suite.py` and its `cases/`), script tests, the generators of `src/tests/` (`gen/`) |
 | `src/tests/` | Generated table-driven Rust tests, one file per module (`#[path]` from that module) |
 
@@ -1055,7 +1089,7 @@ python tests/share_e2e.py screenshots    # window sharing: real WebRTC between c
 python tests/suite.py --report tests/report   # the experience suite: 4,100+ tests, report.md + report.json
 python tests/live_smoke.py --offline     # the weekly check against the real services, on stand-ins
 cargo build --release --features e2e; python tests/windows_e2e.py --relay ws://127.0.0.1:8799   # the real app on Windows
-cd server/together-relay; npm install; npm test   # the relay, on a local wrangler dev
+cd server/together-relay; npm install; npm test   # the relay, on a local wrangler dev (Windows too)
 ```
 
 `suite.py` is the experience suite: 4,126 tests in eight groups, run with one command and
@@ -1112,7 +1146,8 @@ are not SDP). `remote.rs` has its own (clicks placed on the picture, the side ba
 of reach, shortcuts and F keys kept home, AltGr characters, one guest at a time, the rate
 limit, letting go, pages that are off limits).
 `server/together-relay/test/run.mjs` runs the relay under `wrangler dev` (seats for five,
-tickets, graces, lookups that expire, ICE servers, size and rate limits). And with that relay
+tickets, graces, lookups that expire, ICE servers, size and rate limits, eight guests joining at
+the same moment). And with that relay
 up, `YTMP_TEST_RELAY=ws://127.0.0.1:8799 cargo test against_a_real_relay` runs a host and six
 guests' apps against it: wrong code, full room, following the video, a guest's pause reaching
 the host, sharing the window (offer and answer sealed through the relay), removal with a new
@@ -1205,6 +1240,8 @@ Manual checks still pending on real Windows:
 - [ ] Settings → Privacy: picking Windows Hello or PIN shows the lock screen in the player; Lock now hides Settings.
 - [ ] Settings → Advanced → hardware acceleration off → *Restart now* restarts with it off.
 - [ ] First start of a fresh install: the welcome shows once; *Show it again* brings it back.
+- [ ] My music with a few thousand songs: scrolling while the covers load doesn't freeze the window.
+- [ ] PIN lock: after 5 wrong PINs, moving the Windows clock forward doesn't skip the wait.
 
 ## Known issues
 

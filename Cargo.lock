@@ -3892,7 +3892,7 @@ dependencies = [
 
 [[package]]
 name = "yt-mini-player"
-version = "0.13.2"
+version = "0.13.3"
 dependencies = [
  "aes-gcm",
  "argon2",

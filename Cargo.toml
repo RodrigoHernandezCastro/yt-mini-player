@@ -1,6 +1,6 @@
 [package]
 name = "yt-mini-player"
-version = "0.13.2"
+version = "0.13.3"
 edition = "2021"
 description = "Floating YouTube player on WebView2 (tao + wry)"
 publish = false
