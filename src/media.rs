@@ -162,11 +162,14 @@ impl MediaState {
     }
 }
 
-/// No control characters, collapsed spaces, at most `max` characters.
+/// No control characters, collapsed spaces, at most `max` characters. The
+/// direction overrides and isolates go too (as in watch together's names):
+/// with them a page could make its title read backwards in the tray or the
+/// music bar, passing itself off as something else.
 fn clean_text(text: &str, max: usize) -> String {
     let collapsed = text
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') { ' ' } else { c })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -250,6 +253,11 @@ mod tests {
             assert_eq!(site(bad), "", "{bad}");
         }
         assert_eq!(site(&"a".repeat(300)), "");
+
+        let spoof = MediaState::from_report("{\"title\":\"Song \u{202e}gpj.exe\u{202c} \u{2067}x\u{2069}\",\"artist\":\"\u{202d}Me\"}").unwrap();
+        assert_eq!((spoof.title.as_str(), spoof.artist.as_str()), ("Song gpj.exe x", "Me"), "no direction overrides");
+        let rtl = MediaState::from_report("{\"title\":\"שיר\"}").unwrap();
+        assert_eq!(rtl.title, "שיר", "right-to-left text itself stays");
 
         let long = format!(r#"{{"hasMedia":true,"title":"{}"}}"#, "a".repeat(500));
         assert_eq!(MediaState::from_report(&long).unwrap().title.chars().count(), MAX_TITLE);
