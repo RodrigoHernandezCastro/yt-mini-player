@@ -77,9 +77,12 @@ pub fn delay_after(failures: u32) -> u64 {
     (FIRST_DELAY << doublings).min(MAX_DELAY)
 }
 
-/// Seconds left before another attempt is allowed, or 0.
+/// Seconds left before another attempt is allowed, or 0. Never more than the
+/// longest wait: if the clock went back after a failure (a time sync, a
+/// flat CMOS battery), the saved moment lies far ahead and would otherwise
+/// keep the PIN locked for as long as the clock was off.
 pub fn remaining(blocked_until: u64, now: u64) -> u64 {
-    blocked_until.saturating_sub(now)
+    blocked_until.saturating_sub(now).min(MAX_DELAY)
 }
 
 pub fn unix_now() -> u64 {
@@ -203,5 +206,8 @@ mod tests {
         assert_eq!(delay_after(u32::MAX), 900);
         assert_eq!(remaining(100, 40), 60);
         assert_eq!(remaining(100, 140), 0);
+        // The clock went back a year after a failure: at most the longest wait.
+        assert_eq!(remaining(1_800_000_000 + 900, 1_800_000_000 - 365 * 86_400), MAX_DELAY);
+        assert_eq!(remaining(u64::MAX, 0), MAX_DELAY);
     }
 }

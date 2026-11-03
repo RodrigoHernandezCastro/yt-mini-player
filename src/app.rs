@@ -139,6 +139,9 @@ pub struct App {
     flow: Option<Flow>,
     hello_busy: bool,
     pin_busy: bool,
+    /// The wait after the last wrong PIN on a monotonic clock (when it
+    /// started, seconds): changing the system clock does not shorten it.
+    pin_wait: Option<(Instant, u64)>,
     lock_error: Option<String>,
     hidden_since: Option<Instant>,
     /// Installed extension ids, shared with the navigation filter.
@@ -384,6 +387,7 @@ impl App {
             flow: None,
             hello_busy: false,
             pin_busy: false,
+            pin_wait: None,
             lock_error: None,
             hidden_since: None,
             allowed_extensions: s.allowed_extensions,
@@ -856,12 +860,14 @@ impl App {
                 if ok {
                     self.settings.lock_failures = 0;
                     self.settings.lock_blocked_until = 0;
+                    self.pin_wait = None;
                     self.save_settings();
                     self.verified();
                 } else {
                     self.settings.lock_failures = self.settings.lock_failures.saturating_add(1);
                     let wait = lock::delay_after(self.settings.lock_failures);
                     self.settings.lock_blocked_until = if wait > 0 { lock::unix_now() + wait } else { 0 };
+                    self.pin_wait = (wait > 0).then(|| (Instant::now(), wait));
                     self.save_settings();
                     self.lock_failed(&t!("lock.pin_wrong"));
                 }
@@ -1472,7 +1478,9 @@ impl App {
     /// `_locales`, "not approved") in the new language. Errors that come from
     /// WebView2 keep its wording.
     fn relocalize_extensions(&mut self, old_not_approved: &str) {
-        let scan = extensions::scan(&self.paths.extensions);
+        // Only names and problems are needed: hashing every extension again
+        // here would freeze the window for as long as that takes.
+        let scan = extensions::scan_names(&self.paths.extensions);
         self.extension_problems = scan.problems;
         let not_approved = t!("app.extension_not_approved");
         for status in &mut self.extensions {
@@ -2191,7 +2199,7 @@ impl App {
             _ => "verify",
         };
         let wait = if method == LockMode::Pin && flow.stage == Stage::Verify {
-            lock::remaining(self.settings.lock_blocked_until, lock::unix_now())
+            self.pin_wait_left()
         } else {
             0
         };
@@ -2249,12 +2257,21 @@ impl App {
         });
     }
 
+    /// Seconds before another PIN may be tried: the saved moment (it
+    /// survives a restart) and, in this run, the monotonic clock (moving the
+    /// system clock forward does not skip the wait). The larger one counts.
+    fn pin_wait_left(&self) -> u64 {
+        let saved = lock::remaining(self.settings.lock_blocked_until, lock::unix_now());
+        let here = self.pin_wait.map_or(0, |(since, secs)| secs.saturating_sub(since.elapsed().as_secs()));
+        saved.max(here)
+    }
+
     fn check_pin(&mut self, pin: zeroize::Zeroizing<String>) {
         let verifying = self.flow.is_some_and(|f| f.stage == Stage::Verify) && self.settings.lock == LockMode::Pin;
         if !verifying || self.pin_busy {
             return;
         }
-        if lock::remaining(self.settings.lock_blocked_until, lock::unix_now()) > 0 {
+        if self.pin_wait_left() > 0 {
             self.push_lock_screen();
             return;
         }
@@ -2320,6 +2337,7 @@ impl App {
         self.settings.pin_hash = pin_hash;
         self.settings.lock_failures = 0;
         self.settings.lock_blocked_until = 0;
+        self.pin_wait = None;
         self.save_settings();
         if !self.locked {
             self.end_flow();
