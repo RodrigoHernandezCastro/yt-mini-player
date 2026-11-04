@@ -18,6 +18,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # The zip is named after Cargo.toml's version (tools/package.ps1) and
+      # the release after the tag: they must agree, or a release goes out
+      # under the wrong number. Checked first, before anything is built.
+      - name: Tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_NAME -cne "v$version") {
+            "::error file=Cargo.toml::The tag is $env:GITHUB_REF_NAME but Cargo.toml says ${version}. Tag v${version}, or change the version, and push again."
+            exit 1
+          }
+          "YTMP_VERSION=$version" >> $env:GITHUB_ENV
+          "Releasing $version"
       - uses: dtolnay/rust-toolchain@stable
       - name: Tests
         run: cargo test --locked
@@ -103,4 +116,16 @@ jobs:
           $zip = Get-ChildItem dist/YT-Mini-Player-*-win64.zip | Select-Object -First 1
           $sums = Join-Path $zip.DirectoryName 'SHA256SUMS.txt'
           "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $zip.FullName).Hash.ToLowerInvariant(), $zip.Name | Set-Content $sums
-          gh release create $env:GITHUB_REF_NAME $zip.FullName $sums --title "YT Mini Player $env:GITHUB_REF_NAME" --generate-notes
+          # The notes: docs/releases/<version>.md when there is one, without
+          # its title line (the release has its own) and with this
+          # repository's name in place of OWNER/REPO; otherwise GitHub's list.
+          $notes = @('--generate-notes')
+          $page = "docs/releases/$env:YTMP_VERSION.md"
+          if (Test-Path -LiteralPath $page) {
+            $body = (Get-Content -LiteralPath $page -Raw -Encoding utf8) -replace '^\s*# [^\r\n]*(\r?\n)+', ''
+            $file = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+            Set-Content -LiteralPath $file -Value $body.Replace('OWNER/REPO', $env:GITHUB_REPOSITORY) -Encoding utf8 -NoNewline
+            $notes = @('--notes-file', $file)
+            "Release notes from $page"
+          }
+          gh release create $env:GITHUB_REF_NAME $zip.FullName $sums --title "YT Mini Player $env:GITHUB_REF_NAME" @notes

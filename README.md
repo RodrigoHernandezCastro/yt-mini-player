@@ -644,6 +644,9 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
 - `.github/workflows/release.yml`: builds the release on GitHub, runs `cargo audit`, publishes
   `SHA256SUMS.txt` and a signed **build-provenance attestation** (Sigstore) for the zip and the
   executables: `gh attestation verify YT-Mini-Player-<version>-win64.zip --repo <owner>/<repo>`.
+  It refuses a tag that doesn't match `Cargo.toml`'s version (`v0.13.3` for `0.13.3`) before
+  building anything, and takes the release notes from `docs/releases/<version>.md` when there is
+  one (GitHub's generated list otherwise).
 - Dependabot opens weekly update PRs for crates and actions.
 - The local "maximum overlay" certificate is code-signing only and not a CA, and its private key
   is deleted right after signing.
@@ -1059,7 +1062,7 @@ cross-compiled from Linux with MinGW (GNU target), so it ships the redistributab
 | `dist/` | Installer (`install.ps1`, `Install.cmd`, `Install-overlay.cmd`, `Uninstall.cmd`, `README.txt`, `ANTIVIRUS.txt`) |
 | `tools/` | `measure.ps1` (memory and CPU), `package.ps1` (packaging), `sign.ps1` (Authenticode), `check-release-exe.ps1` (refuses the test build) |
 | `docs/SIGNING.md` | Signing the releases: certificates that fit, CI and local steps, antivirus false positives |
-| `docs/releases/` | Release notes, one file per version (what the GitHub release page shows) |
+| `docs/releases/` | Release notes, one file per version: `release.yml` publishes `<version>.md` as the release's notes |
 | `tests/` | Browser suites (`suite.py` and its `cases/`), script tests, the generators of `src/tests/` (`gen/`) |
 | `src/tests/` | Generated table-driven Rust tests, one file per module (`#[path]` from that module) |
 
