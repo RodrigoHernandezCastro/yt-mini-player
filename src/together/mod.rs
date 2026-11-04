@@ -695,6 +695,8 @@ impl Together {
                 Out::Cast(json) => effects.push(Effect::Cast(json)),
                 Out::Stream(json) => effects.push(Effect::Stream(json)),
                 Out::Over(reason) => {
+                    // Only the reason's key (such as together.ended_unreachable).
+                    crate::diag::note(format!("together: over ({})", reason.key()));
                     self.stop(Duration::ZERO);
                     self.ended = Some(reason);
                     effects.push(Effect::Toast(crate::i18n::text(reason.key())));
