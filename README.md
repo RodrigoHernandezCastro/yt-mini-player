@@ -422,9 +422,11 @@ L, O and U, so nothing can be misread.
 
 **What the server sees.** A small relay (Cloudflare Workers + Durable Objects, in
 `server/together-relay/`) passes messages between the host and the guests. It never sees the
-code: guests look the room up by `SHA-256("ytmp-together/lookup/v1" ‖ code)`, which expires
-with the code. Everything else is **end-to-end encrypted**: a guest proves it knows the code
-with a first message sealed with a key derived from it (HKDF-SHA256); the host answers with an
+code: guests look the room up by a value derived from it with **Argon2id** (19 MiB, 2 passes)
+and HKDF-SHA256, which expires with the code. Argon2id makes every guess cost memory and time,
+so whoever runs the relay cannot try all the codes while one lasts. Everything else is
+**end-to-end encrypted**: a guest proves it knows the code with a first message sealed with a
+key derived the same way; the host answers with an
 X25519 key exchange and the room key (AES-256-GCM), sealed with a key that mixes the
 Diffie–Hellman secret and the code, so recording the traffic and learning the code later
 doesn't open it. Room messages are bound to their sender and numbered (replays are dropped);
@@ -495,7 +497,9 @@ reload.
 **Approval:** any program running as you can write to that folder, and an extension sees the
 pages (and the signed-in sessions) it runs on. So each extension gets a **SHA-256 fingerprint**
 of its whole content and only loads after you approve it in a Windows dialog that lists its
-permissions and warns if it can read every site. If a single byte changes, it asks again.
+permissions and warns if it can read every site. If a single byte changes, it asks again, and
+an extension changed while the app was closed waits aside while WebView2 starts (WebView2
+would otherwise load it before the app could ask).
 Rejected ones stay off until you press **Reload**. Archives are capped at 10,000 files and
 256 MB unpacked (zip-bomb protection), and so are extension folders: sizes are checked before
 anything is read.
@@ -530,8 +534,14 @@ yours is too old.
 
   No prompts or dialogs. The TPM step runs in the background the first time (generating the key
   inside the chip can take a few seconds) and only replaces `vault.key` after checking that the
-  TPM gives the same key back. Without a usable TPM, the key stays protected by DPAPI. Files from
-  older versions (`*.json`, in plain text) are migrated and deleted on first launch.
+  TPM gives the same key back. Without a usable TPM, the key stays protected by DPAPI. Plain
+  `*.json` files are never read (anyone who can write to the folder could otherwise turn the
+  lock off, approve an extension or unlock a plan).
+- **The sign-ins belong to the settings.** A random marker sits both in the encrypted settings
+  and in the browser profile. If the settings are deleted, damaged or from another key, or the
+  profile is not theirs (swapped, or older settings put back), every saved sign-in is wiped
+  before any page opens: deleting a file does not get anyone past the lock. The marker changes
+  each time the lock is turned on.
 - **No EFS.** Version 0.6.0 encrypted the data folder with EFS, which makes Windows ask the first
   time to *back up the file encryption certificate and key*: a scary dialog for something that
   wasn't needed. Since 0.6.1 the app doesn't use EFS and decrypts a folder 0.6.0 had encrypted (no
@@ -577,7 +587,9 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
   Plex/Jellyfin-style servers), no `file:`, custom protocols or other schemes, and extension
   pages only for installed extensions.
 - **New windows** from a catalog service or a sign-in provider open in the same window;
-  anything else opens in your default browser (at most one every 2 s). Only plain `http(s)`
+  anything else opens in your default browser, only when you clicked for it (WebView2 has no
+  pop-up blocker, so a site could otherwise open tabs there by itself) and at most one every
+  2 s. Only plain `http(s)`
   addresses are ever handed to the browser, and the app's folder buttons only open folders:
   Windows is never asked to run a file or a custom protocol.
 - **Downloads are blocked.** **Permissions are denied** (camera, microphone, location,
@@ -587,11 +599,12 @@ Encryption at rest comes from the vault (TPM + DPAPI) and Chromium's own DPAPI e
 - **The music bar shows the domain** of pages outside the catalog, so a site can't pass itself
   off as something else down there. Titles lose control and text-direction characters, so they
   can't be made to read backwards either.
-- The start page, music bar and lock screen are served with a strict Content-Security-Policy,
-  `no-referrer` and `X-Content-Type-Options: nosniff`, and the bar and lock screen can't navigate
-  away from their page.
-- **My music:** its page only runs its own script (CSP with the script's SHA-256 hash, not
-  `unsafe-inline`), renders tags and titles as text only, and can't be framed. Its commands
+- Every page of the app (start screen, music bar, lock screen, Settings, Watch together, the
+  shared window) is served with a strict Content-Security-Policy that runs only the page's own
+  script, by its SHA-256 hash (never `unsafe-inline`: no other inline script can run, not even
+  one an extension slips in), plus `no-referrer` and `X-Content-Type-Options: nosniff`; the side
+  windows can't navigate away from their page.
+- **My music:** renders tags and titles as text only, and can't be framed. Its commands
   (`music:…`) are a separate closed list accepted **only from that page's URL**, with sizes and
   ids validated; the app pushes data to it only after checking, inside the page, that it is that
   page. Songs and covers are served by id (never by a path from the URL) and require a random
