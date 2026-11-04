@@ -43,6 +43,7 @@
   "app.restart_failed": "No se pudo reiniciar la app: {error}",
   "app.seek_back": "−{seconds} s",
   "app.seek_forward": "+{seconds} s",
+  "app.sessions_cleared": "No se pudieron leer los ajustes, o no eran de este perfil, así que se cerró la sesión de todos los servicios para proteger tus cuentas. Vuelve a iniciar sesión donde lo necesites.",
   "app.settings_failed": "No se pudo abrir la ventana de Configuración.",
   "app.sign_in_refused": "Google no permitió iniciar sesión desde esta ventana. Puede pasar cuando Google cambia sus páginas de acceso: inténtalo más tarde o busca una actualización de la app.",
   "app.signed_out": "Sesiones cerradas y datos de navegación borrados en todos los servicios",

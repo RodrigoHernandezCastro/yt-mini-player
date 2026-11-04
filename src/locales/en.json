@@ -43,6 +43,7 @@
   "app.restart_failed": "Couldn't restart the app: {error}",
   "app.seek_back": "−{seconds} s",
   "app.seek_forward": "+{seconds} s",
+  "app.sessions_cleared": "Your settings couldn't be read, or didn't belong to this profile, so every service was signed out to keep your accounts safe. Sign in again where you need to.",
   "app.settings_failed": "The Settings window couldn't open.",
   "app.sign_in_refused": "Google didn't allow signing in from this window. That can happen after Google changes its sign-in pages: try again later or check for an app update.",
   "app.signed_out": "Signed out of every service and browsing data cleared",

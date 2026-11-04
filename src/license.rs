@@ -187,13 +187,17 @@ pub struct LicenseRecord {
 }
 
 impl LicenseRecord {
-    /// The plan in force now: the license's if it is active, has not expired
-    /// and the last validation is not too old.
+    /// The plan in force now: the license's if it was activated on this PC
+    /// (a key and an instance from the store: a record made by hand has
+    /// neither), is active, has not expired and the last validation is not
+    /// too old. A validation "in the future" is no validation at all.
     pub fn effective_plan(&self, now: u64) -> Plan {
+        let activated = plausible_key(&self.key) && !self.instance_id.is_empty();
         let active = self.status == "active" || self.status == "inactive";
         let expired = self.expires_at.as_deref().and_then(parse_iso8601).is_some_and(|t| t <= now);
-        let fresh = self.plan.grace().is_none_or(|grace| now.saturating_sub(self.validated_at) <= grace);
-        if active && !expired && fresh {
+        let fresh = !self.checked_in_future(now)
+            && self.plan.grace().is_none_or(|grace| now.saturating_sub(self.validated_at) <= grace);
+        if activated && active && !expired && fresh {
             self.plan
         } else {
             Plan::Free
@@ -203,7 +207,13 @@ impl LicenseRecord {
     /// Is it time to check it with the store? (A key that stopped being
     /// valid is only checked again if the user asks.)
     pub fn needs_validation(&self, now: u64) -> bool {
-        self.status != "invalid" && now.saturating_sub(self.validated_at) >= self.plan.revalidate_after()
+        self.status != "invalid"
+            && (self.checked_in_future(now) || now.saturating_sub(self.validated_at) >= self.plan.revalidate_after())
+    }
+
+    /// A last validation later than now (beyond a clock that is a little off).
+    fn checked_in_future(&self, now: u64) -> bool {
+        self.validated_at > now.saturating_add(DAY)
     }
 }
 
@@ -452,37 +462,46 @@ mod tests {
         assert!(l.download && l.can_add_playlist(10_000) && l.max_playlists.is_none(), "unlimited for lifetime");
     }
 
+    const KEY: &str = "38B1460A-5104-4067-A91D-77B872934D51";
+
     #[test]
     fn interprets_valid_and_rejected_answers() {
         let c = config();
-        let ok = interpret(&c, 200, &response(1234, 502, "active", None), "K", "", NOW).unwrap();
+        let ok = interpret(&c, 200, &response(1234, 502, "active", None), KEY, "", NOW).unwrap();
         assert_eq!((ok.plan, ok.instance_id.as_str(), ok.validated_at), (Plan::Lifetime, "inst-1", NOW));
         assert_eq!(mask_email(&ok.customer_email), "a***@example.com");
 
-        let other_store = interpret(&c, 200, &response(999, 502, "active", None), "K", "", NOW).unwrap_err();
+        let other_store = interpret(&c, 200, &response(999, 502, "active", None), KEY, "", NOW).unwrap_err();
         assert_eq!(other_store, LicenseError::Rejected(msg!("music.license.other_store")));
-        let other_product = interpret(&c, 200, &response(1234, 600, "active", None), "K", "", NOW).unwrap_err();
+        let other_product = interpret(&c, 200, &response(1234, 600, "active", None), KEY, "", NOW).unwrap_err();
         assert_eq!(other_product.message(), msg!("music.license.other_product"));
 
         let mut expired = response(1234, 501, "expired", Some("2026-01-01T00:00:00.000000Z"));
         expired["valid"] = false.into();
         expired["activated"] = serde_json::Value::Null;
-        assert_eq!(interpret(&c, 200, &expired, "K", "", NOW).unwrap_err().message(), msg!("music.license.expired"));
+        assert_eq!(interpret(&c, 200, &expired, KEY, "", NOW).unwrap_err().message(), msg!("music.license.expired"));
         // Active by its status but with a past date: expired all the same.
         let past = response(1234, 501, "active", Some("2020-01-01T00:00:00Z"));
-        assert!(interpret(&c, 200, &past, "K", "", NOW).is_err());
+        assert!(interpret(&c, 200, &past, KEY, "", NOW).is_err());
 
         let not_found = serde_json::json!({ "activated": false, "error": "license_key not found.", "license_key": null, "meta": null });
-        assert_eq!(interpret(&c, 404, &not_found, "K", "", NOW).unwrap_err().message(), msg!("music.license.not_found"));
+        assert_eq!(interpret(&c, 404, &not_found, KEY, "", NOW).unwrap_err().message(), msg!("music.license.not_found"));
         let limit = serde_json::json!({ "activated": false, "error": "This license key has reached the activation limit." });
-        assert_eq!(interpret(&c, 400, &limit, "K", "", NOW).unwrap_err().message(), msg!("music.license.limit"));
+        assert_eq!(interpret(&c, 400, &limit, KEY, "", NOW).unwrap_err().message(), msg!("music.license.limit"));
         let odd = serde_json::json!({ "activated": false, "error": "Something new." });
-        assert_eq!(interpret(&c, 400, &odd, "K", "", NOW).unwrap_err().message(), msg!("music.license.rejected_detail", detail = "Something new."));
+        assert_eq!(interpret(&c, 400, &odd, KEY, "", NOW).unwrap_err().message(), msg!("music.license.rejected_detail", detail = "Something new."));
     }
 
     #[test]
     fn offline_grace_and_revalidation() {
-        let mut r = LicenseRecord { plan: Plan::Downloads, status: "active".into(), validated_at: NOW, ..Default::default() };
+        let mut r = LicenseRecord {
+            key: "38B1460A-5104-4067-A91D-77B872934D51".into(),
+            instance_id: "f90ec370-fd83-46a5-8bbd-44a241e78665".into(),
+            plan: Plan::Downloads,
+            status: "active".into(),
+            validated_at: NOW,
+            ..Default::default()
+        };
         assert_eq!(r.effective_plan(NOW), Plan::Downloads);
         assert!(!r.needs_validation(NOW + 6 * DAY), "the subscription is checked once a week");
         assert!(r.needs_validation(NOW + 7 * DAY));
@@ -501,6 +520,32 @@ mod tests {
         assert_eq!(r.effective_plan(parse_iso8601("2026-09-21T09:59:59Z").unwrap()), Plan::Lifetime);
         r.validated_at = parse_iso8601("2026-09-21T09:00:00Z").unwrap();
         assert_eq!(r.effective_plan(parse_iso8601("2026-09-21T10:00:01Z").unwrap()), Plan::Free);
+    }
+
+    #[test]
+    fn a_record_made_by_hand_unlocks_nothing() {
+        let real = LicenseRecord {
+            key: "38B1460A-5104-4067-A91D-77B872934D51".into(),
+            instance_id: "f90ec370-fd83-46a5-8bbd-44a241e78665".into(),
+            plan: Plan::Lifetime,
+            status: "active".into(),
+            validated_at: NOW,
+            ..Default::default()
+        };
+        assert_eq!(real.effective_plan(NOW), Plan::Lifetime);
+        // No key or no instance: never activated with the store.
+        let forged = LicenseRecord { plan: Plan::Lifetime, status: "active".into(), ..Default::default() };
+        assert_eq!(forged.effective_plan(NOW), Plan::Free);
+        assert_eq!(LicenseRecord { instance_id: String::new(), ..real.clone() }.effective_plan(NOW), Plan::Free);
+        assert_eq!(LicenseRecord { key: "a b".into(), ..real.clone() }.effective_plan(NOW), Plan::Free);
+        // "Checked" in ten years' time: no check, and it is checked now.
+        let ahead = LicenseRecord { validated_at: NOW + 3650 * DAY, ..real.clone() };
+        assert_eq!(ahead.effective_plan(NOW), Plan::Free);
+        assert!(ahead.needs_validation(NOW));
+        // A clock a few hours off is fine.
+        let skew = LicenseRecord { validated_at: NOW + 3 * 3600, ..real };
+        assert_eq!(skew.effective_plan(NOW), Plan::Lifetime);
+        assert!(!skew.needs_validation(NOW));
     }
 
     #[test]

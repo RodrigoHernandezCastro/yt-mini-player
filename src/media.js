@@ -187,12 +187,34 @@
   // The position only counts as a change while someone watches the progress.
   const keyFor = (state) => JSON.stringify(Object.assign({}, state, { position: watching ? Math.floor(state.position) : 0 }));
 
+  // At most one report every REPORT_GAP_MS, whoever asks: the page itself
+  // can call __ytmpMediaReport in a loop, and every report reaches the app
+  // (tray, music bar, the guests of a watch together host). What is asked
+  // for meanwhile goes out once the gap is over, so the last state always
+  // arrives.
+  const REPORT_GAP_MS = 250;
+  let cooling = false;
+  let pending = null; // null: nothing waiting; otherwise whether it was forced
+
   function report(force) {
+    if (cooling) {
+      pending = !!(pending || force);
+      return;
+    }
     const state = readState();
     const key = keyFor(state);
     if (!force && key === lastSent) return;
     lastSent = key;
     send('media-state:' + JSON.stringify(state));
+    cooling = true;
+    setTimeout(() => {
+      cooling = false;
+      if (pending !== null) {
+        const forced = pending;
+        pending = null;
+        report(forced);
+      }
+    }, REPORT_GAP_MS);
   }
 
   let soon = 0;

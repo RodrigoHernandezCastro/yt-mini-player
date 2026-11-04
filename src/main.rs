@@ -81,6 +81,17 @@ fn run() -> Result<(), Box<dyn Error>> {
         platform::wait_for_exit(pid, std::time::Duration::from_secs(15));
     }
 
+    // Maximum overlay (UIAccess): WebView2 lets the user's environment pick
+    // the runtime folder and add browser arguments. Any program of the user
+    // could set them and so run its code with UIAccess (keys and clicks into
+    // administrator windows), so that build ignores them.
+    if platform::has_uiaccess() {
+        let removed = webview::ignore_runtime_overrides();
+        if !removed.is_empty() {
+            eprintln!("ignored WebView2 overrides: {}", removed.join(", "));
+        }
+    }
+
     // If it is already running, ask it to show itself and quit this copy.
     // (The test build with its own data folder is an instance of its own.)
     let activation = match platform::claim_instance(e2e::instance_name().as_deref()) {
@@ -127,7 +138,18 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         });
     }
-    let settings = Settings::load(&store, &paths.settings);
+    let (mut settings, settings_read) = Settings::load_checked(&store, &paths.settings);
+    // Before any webview opens the profile: settings that cannot be read or
+    // a profile that is not theirs wipe the saved sign-ins (the lock cannot
+    // be skipped by deleting or swapping files). If wiping fails, nothing
+    // starts.
+    let profile_check = config::secure_profile(&paths.profile, &mut settings, settings_read)?;
+    if profile_check != config::ProfileCheck::Matches {
+        diag::note(format!("profile: {profile_check:?}"));
+        if let Err(err) = settings.save(&store, &paths.settings) {
+            eprintln!("could not save the settings: {err}");
+        }
+    }
     // The language the user picked, or else the Windows one.
     i18n::set(settings.language());
     // Before the first webview: they all share these arguments.
@@ -139,6 +161,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let overlay = platform::has_uiaccess();
     let extension_ids = config::load_extension_ids(&store, &paths.extension_ids);
     let allowed_extensions = Arc::new(Mutex::new(extension_ids.values().cloned().collect::<Vec<_>>()));
+    // Installed extensions that changed since they were approved wait aside
+    // while WebView2 starts (it would load them at once, before the app can
+    // ask): they come back once the webview exists.
+    let held = extensions::hold_changed(&paths.extensions, &extension_ids, &settings.approved_extensions);
+    if !held.is_empty() {
+        diag::note(format!("extensions: {} changed, held until approved", held.len()));
+    }
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     // After creating the loop: tao sets its own theme mode there.
@@ -196,6 +225,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
 
     webview::watch_processes(&webview, "main");
+    // Back in place: the app asks about them (App::new → reload_extensions).
+    extensions::release_held(&paths.extensions);
 
     let show_proxy = proxy.clone();
     activation.listen(move || {
@@ -218,6 +249,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         keys,
         legacy_efs,
         vault_reset: vault_state == vault::Opened::Replaced,
+        sessions_cleared: profile_check == config::ProfileCheck::Wipe,
         extension_ids,
         allowed_extensions,
         music: Some(music),

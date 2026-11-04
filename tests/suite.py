@@ -205,6 +205,8 @@ class Env:
 
     @staticmethod
     def serve(page, body, csp=CSP, host="https://ytmp.localhost/**"):
+        # As home::page_csp: the page's own script is allowed by its hash.
+        csp = csp.replace("{script}", script_hash(body), 1)
         page.route(host, lambda route: route.fulfill(
             status=200, content_type="text/html; charset=utf-8", headers={"Content-Security-Policy": csp}, body=body))
 
@@ -1998,6 +2000,7 @@ def _(env, name):
     for directive in ("default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"):
         expect(directive in csp, f"missing {directive}")
     expect("unsafe-eval" not in csp, "unsafe-eval")
+    expect("script-src '{script}'" in csp and "script-src 'unsafe-inline'" not in csp, "scripts only by their hash")
 
 
 @test("security", "My music: its script is allowed by hash, not 'unsafe-inline'")

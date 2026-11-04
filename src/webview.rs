@@ -72,6 +72,27 @@ pub fn browser_args() -> &'static str {
     ARGS.get().map_or(BROWSER_ARGS, String::as_str)
 }
 
+/// Variables WebView2 reads from the environment to change which runtime
+/// an app loads, its arguments, its data folder or a debugger
+/// (`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`...).
+fn is_runtime_override(name: &str) -> bool {
+    name.len() > 9 && name.is_char_boundary(9) && name[..9].eq_ignore_ascii_case("WEBVIEW2_")
+}
+
+/// Removes them from this process (and so from WebView2's processes, which
+/// inherit it). Call first thing, before any thread starts. Returns their
+/// names.
+pub fn ignore_runtime_overrides() -> Vec<String> {
+    let names: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| is_runtime_override(name))
+        .collect();
+    for name in &names {
+        std::env::remove_var(name);
+    }
+    names
+}
+
 /// This session's keys (random on every start).
 #[derive(Clone)]
 pub struct Keys {
@@ -173,6 +194,8 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
     let popup_proxy = proxy.clone();
     let download_proxy = proxy.clone();
     let token = keys.ipc.clone();
+    let popups = Popups::default();
+    let popup_log = popups.clone();
     let mut builder = WebViewBuilder::new_with_web_context(web_context)
         .with_url(start_url)
         // Black instead of white while the first page loads.
@@ -247,8 +270,11 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
         .with_new_window_req_handler(move |url, _features| {
             let command = match policy::new_window(&url, overlay) {
                 NewWindow::SameWindow(url) => Command::Navigate(url),
-                NewWindow::External(url) => Command::OpenExternal(url),
-                NewWindow::Deny => Command::Blocked("blocked.popup".to_owned()),
+                // Your browser only opens for a click: WebView2 has no
+                // pop-up blocker, so a site could otherwise open a tab
+                // there every few seconds by itself.
+                NewWindow::External(external) if popup_log.clicked(&url) => Command::OpenExternal(external),
+                NewWindow::External(_) | NewWindow::Deny => Command::Blocked("blocked.popup".to_owned()),
             };
             let _ = popup_proxy.send_event(UserEvent::Command(command));
             NewWindowResponse::Deny
@@ -276,7 +302,81 @@ pub fn build(window: &Window, web_context: &mut WebContext, options: Options) ->
 
     let webview = builder.build(window)?;
     harden(&webview);
+    if !watch_popups(&webview, popups) {
+        eprintln!("cannot tell clicked pop-ups apart: they open as before");
+    }
     Ok(webview)
+}
+
+/// What WebView2 said about the latest new windows: whether a click (or a
+/// key) asked for each. wry hands the request to `with_new_window_req_handler`
+/// later, from the message loop; this list is filled before that, in the
+/// event itself.
+#[derive(Clone, Default)]
+struct Popups(Arc<Mutex<PopupLog>>);
+
+#[derive(Default)]
+struct PopupLog {
+    /// The list is being filled (else everything counts as clicked, as
+    /// before: never worse than without it).
+    watching: bool,
+    recent: std::collections::VecDeque<(String, bool)>,
+}
+
+impl Popups {
+    fn note(&self, uri: String, user: bool) {
+        if let Ok(mut log) = self.0.lock() {
+            log.recent.push_back((uri, user));
+            while log.recent.len() > 32 {
+                log.recent.pop_front();
+            }
+        }
+    }
+
+    /// Did a click ask for this window? Its entry is used up.
+    fn clicked(&self, uri: &str) -> bool {
+        let Ok(mut log) = self.0.lock() else { return false };
+        if !log.watching {
+            return true;
+        }
+        match log.recent.iter().position(|(u, _)| u == uri) {
+            Some(i) => log.recent.remove(i).is_some_and(|(_, user)| user),
+            None => false,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn watch_popups(webview: &WebView, popups: Popups) -> bool {
+    use webview2_com::{take_pwstr, NewWindowRequestedEventHandler};
+    use windows::core::{BOOL, PWSTR};
+    use wry::WebViewExtWindows;
+
+    let log = popups.clone();
+    let handler = NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let mut uri = PWSTR::null();
+        let mut user = BOOL::default();
+        unsafe {
+            args.Uri(&mut uri)?;
+            args.IsUserInitiated(&mut user)?;
+        }
+        log.note(take_pwstr(uri), user.as_bool());
+        Ok(())
+    }));
+    let mut token = 0i64;
+    let ok = unsafe { webview.webview().add_NewWindowRequested(&handler, &mut token) }.is_ok();
+    if ok {
+        if let Ok(mut log) = popups.0.lock() {
+            log.watching = true;
+        }
+    }
+    ok
+}
+
+#[cfg(not(windows))]
+fn watch_popups(_: &WebView, _: Popups) -> bool {
+    false
 }
 
 /// Threads that read covers for the music page.
@@ -500,6 +600,36 @@ mod tests {
         assert!(!js.contains("window.__ytmpStartDrag"));
         assert!(js.contains("location.pathname === '/music'"), "the music bridge only exists on its page");
         assert!(js.contains("location.pathname === '/stream'"), "nor the window's");
+    }
+
+    #[test]
+    fn only_clicked_popups_reach_the_browser() {
+        let popups = Popups::default();
+        assert!(popups.clicked("https://a.example/"), "not watching: as before");
+        popups.0.lock().unwrap().watching = true;
+        popups.note("https://a.example/".into(), true);
+        popups.note("https://b.example/".into(), false);
+        assert!(!popups.clicked("https://b.example/"), "a site opening it by itself");
+        assert!(popups.clicked("https://a.example/"), "a click");
+        assert!(!popups.clicked("https://a.example/"), "each entry once");
+        assert!(!popups.clicked("https://never.example/"), "unknown: not opened");
+        for i in 0..100 {
+            popups.note(format!("https://{i}.example/"), false);
+        }
+        assert!(popups.0.lock().unwrap().recent.len() <= 32, "bounded");
+    }
+
+    #[test]
+    fn runtime_overrides_are_recognised() {
+        for name in ["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "webview2_user_data_folder", "WebView2_Release_Channel_Preference"] {
+            assert!(is_runtime_override(name), "{name}");
+        }
+        for name in ["WEBVIEW2_", "WEBVIEW2", "PATH", "MY_WEBVIEW2_X", "YTMP_E2E_PORT"] {
+            assert!(!is_runtime_override(name), "{name}");
+        }
+        std::env::set_var("WEBVIEW2_TEST_ONLY_OVERRIDE", "x");
+        assert!(ignore_runtime_overrides().iter().any(|n| n == "WEBVIEW2_TEST_ONLY_OVERRIDE"));
+        assert!(std::env::var_os("WEBVIEW2_TEST_ONLY_OVERRIDE").is_none());
     }
 
     #[test]

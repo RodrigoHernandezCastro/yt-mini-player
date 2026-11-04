@@ -35,6 +35,8 @@ use sha2::{Digest, Sha256};
 const ARCHIVE_DIR: &str = ".archives";
 /// Its name up to 0.7.0, renamed on the next scan.
 const OLD_ARCHIVE_DIR: &str = ".archivos";
+/// Where changed extensions wait while WebView2 starts ([`hold_changed`]).
+const HELD_DIR: &str = ".held";
 /// Unpacking limits (against "ZIP bombs").
 const MAX_ENTRIES: usize = 10_000;
 const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
@@ -105,6 +107,66 @@ pub enum ExtensionEvent {
     Removed { id: String },
     /// The runtime does not support extensions (older than about version 118).
     Unsupported(String),
+}
+
+/// Before WebView2 starts. WebView2 loads installed extensions from their
+/// folders as soon as it starts, before the app can check them: one whose
+/// folder no longer matches the fingerprint the user approved (changed by
+/// another program while the app was closed, or never approved) would run
+/// its new code on the first page. Its folder is moved aside, so the
+/// browser cannot find it; [`release_held`] puts it back once the webview
+/// exists, and the usual question follows. Returns the folders held.
+pub fn hold_changed(
+    dir: &Path,
+    installed: &std::collections::BTreeMap<String, String>,
+    approved: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut held = Vec::new();
+    for folder in installed.keys() {
+        if folder.is_empty() || folder.starts_with('.') || folder.contains(['/', '\\', ':']) {
+            continue;
+        }
+        let base = dir.join(folder);
+        if !base.is_dir() {
+            continue;
+        }
+        let same = approved.get(folder).is_some_and(|wanted| fingerprint(&base).is_ok_and(|now| &now == wanted));
+        if same {
+            continue;
+        }
+        let aside = dir.join(HELD_DIR);
+        // A name of its own, should an earlier one still be waiting there.
+        let target = (0..100).map(|n| aside.join(if n == 0 { folder.clone() } else { format!("{folder}~{n}") })).find(|t| !t.exists());
+        let Some(target) = target else { continue };
+        if fs::create_dir_all(&aside).and_then(|_| fs::rename(&base, &target)).is_ok() {
+            held.push(folder.clone());
+        }
+    }
+    held
+}
+
+/// Puts back what [`hold_changed`] moved aside (and whatever an earlier run
+/// left there). A folder that took its place meanwhile wins: the held one
+/// stays in `.held`. Returns the folders put back.
+pub fn release_held(dir: &Path) -> Vec<String> {
+    let aside = dir.join(HELD_DIR);
+    let Ok(entries) = fs::read_dir(&aside) else { return Vec::new() };
+    let mut back = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else { continue };
+        let folder = name.split('~').next().unwrap_or(&name).to_owned();
+        let target = dir.join(&folder);
+        if folder.is_empty() || target.exists() {
+            continue;
+        }
+        if fs::rename(entry.path(), &target).is_ok() {
+            back.push(folder);
+        }
+    }
+    // Only if nothing is left in it.
+    let _ = fs::remove_dir(&aside);
+    back.sort();
+    back
 }
 
 /// Unpacks pending archives and lists the valid extensions.
@@ -842,6 +904,40 @@ mod tests {
         assert_eq!(scan.extensions.len(), 1);
         assert_eq!(scan.extensions[0].version, "2.0");
         assert_eq!(scan.extensions[0].page, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn changed_extensions_wait_aside_while_webview2_starts() {
+        use std::collections::BTreeMap;
+        let dir = temp_dir("held");
+        for name in ["kept", "changed", "unapproved", "not-installed"] {
+            fs::create_dir_all(dir.join(name)).unwrap();
+            fs::write(dir.join(name).join("manifest.json"), MANIFEST).unwrap();
+        }
+        let approved: BTreeMap<String, String> = ["kept", "changed"]
+            .iter()
+            .map(|n| (n.to_string(), fingerprint(&dir.join(n)).unwrap()))
+            .collect();
+        let installed: BTreeMap<String, String> = ["kept", "changed", "unapproved", "gone"]
+            .iter()
+            .map(|n| (n.to_string(), "a".repeat(32)))
+            .collect();
+        // Another program changes an approved extension while the app is closed.
+        fs::write(dir.join("changed").join("content.js"), "steal()").unwrap();
+        let held = hold_changed(&dir, &installed, &approved);
+        assert_eq!(held, vec!["changed".to_owned(), "unapproved".to_owned()]);
+        assert!(!dir.join("changed").exists() && !dir.join("unapproved").exists(), "WebView2 cannot find them");
+        assert!(dir.join("kept").is_dir() && dir.join("not-installed").is_dir());
+        assert!(scan(&dir).extensions.iter().all(|e| e.folder != "changed"), "the scan does not see .held");
+        // Once the webview exists they come back, and the app asks about them.
+        assert_eq!(release_held(&dir), vec!["changed".to_owned(), "unapproved".to_owned()]);
+        assert!(dir.join("changed/content.js").is_file() && !dir.join(HELD_DIR).exists());
+        // A folder that took its place meanwhile wins; the held one waits.
+        hold_changed(&dir, &installed, &approved);
+        fs::create_dir_all(dir.join("changed")).unwrap();
+        assert_eq!(release_held(&dir), vec!["unapproved".to_owned()]);
+        assert!(dir.join(HELD_DIR).join("changed").is_dir());
         fs::remove_dir_all(&dir).unwrap();
     }
 

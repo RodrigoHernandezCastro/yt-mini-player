@@ -53,13 +53,21 @@ const SETTINGS_STRINGS: &[&str] = &["settings.", "lang.", "common."];
 /// The side bar and menu (ui.js) on every page.
 pub const UI_STRINGS: &[&str] = &["ui.", "key.", "lang."];
 
-/// Page security policy: nothing external, only its own script and inline
-/// styles. The scripts the app injects do not depend on it.
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+/// Page security policy: nothing external; of scripts, only the page's own,
+/// by its hash (`{script}`, filled in by [`page_csp`]): no other inline
+/// script can run, not one an extension's content script slips into the
+/// page nor one a bug would let in. Inline styles. The scripts the app
+/// injects do not depend on it.
+const CSP: &str = "default-src 'none'; script-src '{script}'; style-src 'unsafe-inline'; \
                    img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /// The music bar also loads the video thumbnail (https).
-const MINI_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+const MINI_CSP: &str = "default-src 'none'; script-src '{script}'; style-src 'unsafe-inline'; \
                         img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/// `policy` with the hash of `page`'s own script.
+fn page_csp(policy: &str, page: &str) -> String {
+    policy.replacen("{script}", &script_hash(page), 1)
+}
 
 /// What the start screen needs to know about the settings. Shared by the
 /// app (which updates it) and the protocol handler (which reads it).
@@ -225,15 +233,15 @@ pub fn respond(request: &Request<Vec<u8>>, state: &SharedHomeState) -> Response<
     let (body, csp) = match uri.path() {
         "/" | "" => {
             let snapshot = state.lock().map(|s| s.clone()).unwrap_or_default();
-            (render(&snapshot), CSP)
+            (render(&snapshot), page_csp(CSP, TEMPLATE))
         }
-        "/music" => (render_music(), music_csp()),
-        "/mini" => (fill(MINI, &StringsOnly { i18n: page_i18n(MINI_STRINGS) }), MINI_CSP),
-        "/lock" => (fill(LOCK, &StringsOnly { i18n: page_i18n(LOCK_STRINGS) }), CSP),
-        "/together" => (fill(TOGETHER, &StringsOnly { i18n: page_i18n(TOGETHER_STRINGS) }), CSP),
-        "/stream" => (fill(STREAM, &StringsOnly { i18n: page_i18n(STREAM_STRINGS) }), CSP),
-        "/settings" => (fill(SETTINGS, &StringsOnly { i18n: page_i18n(SETTINGS_STRINGS) }), CSP),
-        "/cast" => (CAST.to_owned(), CSP),
+        "/music" => (render_music(), music_csp().to_owned()),
+        "/mini" => (fill(MINI, &StringsOnly { i18n: page_i18n(MINI_STRINGS) }), page_csp(MINI_CSP, MINI)),
+        "/lock" => (fill(LOCK, &StringsOnly { i18n: page_i18n(LOCK_STRINGS) }), page_csp(CSP, LOCK)),
+        "/together" => (fill(TOGETHER, &StringsOnly { i18n: page_i18n(TOGETHER_STRINGS) }), page_csp(CSP, TOGETHER)),
+        "/stream" => (fill(STREAM, &StringsOnly { i18n: page_i18n(STREAM_STRINGS) }), page_csp(CSP, STREAM)),
+        "/settings" => (fill(SETTINGS, &StringsOnly { i18n: page_i18n(SETTINGS_STRINGS) }), page_csp(CSP, SETTINGS)),
+        "/cast" => (CAST.to_owned(), page_csp(CSP, CAST)),
         _ => {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -372,6 +380,24 @@ mod tests {
         assert!(csp.contains("default-src 'none'") && !csp.contains("https:"), "nothing external: {csp}");
         assert_eq!(settings.headers()["x-frame-options"], "DENY");
         let settings_html = String::from_utf8_lossy(settings.body()).into_owned();
+        // Each page's own script runs by its hash; no other inline script can.
+        for (path, page) in [
+            ("ytmp://localhost/", TEMPLATE),
+            ("ytmp://localhost/mini", MINI),
+            ("ytmp://localhost/lock", LOCK),
+            ("ytmp://localhost/together", TOGETHER),
+            ("ytmp://localhost/stream", STREAM),
+            ("ytmp://localhost/settings", SETTINGS),
+            ("ytmp://localhost/cast", CAST),
+        ] {
+            let res = respond(&Request::get(path).body(Vec::new()).unwrap(), &state);
+            let csp = res.headers()["content-security-policy"].to_str().unwrap().to_owned();
+            assert!(csp.contains(&format!("script-src '{}';", script_hash(page))), "{path}: {csp}");
+            assert!(!csp.contains("script-src 'unsafe-inline'") && !csp.contains("{script}"), "{path}: {csp}");
+            let html = String::from_utf8_lossy(res.body()).into_owned();
+            assert_eq!(script_hash(&html), script_hash(page), "{path}: the data does not change the script");
+            assert_eq!(html.matches("<script>").count(), 1, "{path}: one inline script");
+        }
         let strings = extract_json(&settings_html)["i18n"]["strings"].clone();
         assert!(settings_html.contains("__ytmpSettings") && !settings_html.contains(PLACEHOLDER));
         assert!(strings["settings.title"].is_string() && strings["lang.label"].is_string());

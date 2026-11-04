@@ -43,6 +43,7 @@
   "app.restart_failed": "Nie udało się ponownie uruchomić aplikacji: {error}",
   "app.seek_back": "−{seconds} s",
   "app.seek_forward": "+{seconds} s",
+  "app.sessions_cleared": "Nie udało się odczytać ustawień albo nie pasowały do tego profilu, więc dla bezpieczeństwa kont wylogowano ze wszystkich usług. Zaloguj się ponownie tam, gdzie trzeba.",
   "app.settings_failed": "Nie udało się otworzyć okna ustawień.",
   "app.sign_in_refused": "Google nie pozwolił zalogować się z tego okna. Zdarza się to po zmianach na stronach logowania Google: spróbuj później albo sprawdź, czy jest aktualizacja aplikacji.",
   "app.signed_out": "Wylogowano ze wszystkich serwisów i wyczyszczono dane przeglądania",

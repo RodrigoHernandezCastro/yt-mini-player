@@ -268,4 +268,19 @@ function env({ host = 'www.example.com', medias = [], yt = null, title = 'Page',
   bare.window.__ytmpMedia('seek-to', 50);
 }
 
+// --- A page that asks for reports in a loop cannot flood the app -----------------------
+{
+  const t = env({ medias: [video()] });
+  for (let i = 0; i < 1000; i++) {
+    t.mediaSession.metadata = { title: 'Title ' + i };
+    t.window.__ytmpMediaReport();
+  }
+  assert.strictEqual(t.states().length, 1, 'one report at once');
+  t.advance(250);
+  assert.strictEqual(t.states().length, 2, 'then one more after the gap');
+  assert.strictEqual(t.states().pop().title, 'Title 999', 'with the last state');
+  t.advance(2000);
+  assert.strictEqual(t.states().length, 2, 'and nothing else');
+}
+
 console.log('media.js: all tests pass');

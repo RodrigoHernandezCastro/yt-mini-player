@@ -271,6 +271,9 @@ pub struct Startup {
     pub legacy_efs: LegacyEfs,
     /// The vault key could not be opened and a new one was made.
     pub vault_reset: bool,
+    /// The settings could not be read or did not match the profile, so the
+    /// saved sign-ins were wiped at start (config::secure_profile).
+    pub sessions_cleared: bool,
     pub extension_ids: ExtensionIds,
     pub allowed_extensions: Arc<Mutex<Vec<String>>>,
     pub music: Option<crate::music::Handle>,
@@ -453,7 +456,9 @@ impl App {
         if app.hidden {
             app.hidden_since = Some(Instant::now());
         }
-        if s.vault_reset {
+        if s.sessions_cleared {
+            app.toast(&t!("app.sessions_cleared"));
+        } else if s.vault_reset {
             app.toast(&t!("app.vault_reset"));
         }
         if crate::diag::crashed_last_time() {
@@ -2338,6 +2343,13 @@ impl App {
         self.settings.lock_failures = 0;
         self.settings.lock_blocked_until = 0;
         self.pin_wait = None;
+        // A new marker: settings from before (a backup with the lock off)
+        // no longer match the profile.
+        if mode != LockMode::Off {
+            if let Err(err) = crate::config::bind_profile(&self.paths.profile, &mut self.settings) {
+                eprintln!("could not renew the profile marker: {err}");
+            }
+        }
         self.save_settings();
         if !self.locked {
             self.end_flow();
