@@ -67,8 +67,28 @@ def devtools_up(port):
         return json.load(answer).get("webSocketDebuggerUrl")
 
 
+_sessions = {}
+
+
+def take_in_news(browser):
+    """Lets Playwright take in what the browser told it since the last call.
+
+    The sync API reads the browser's messages (such as "a window has a new
+    page") only while a call waits for an answer, and reading .contexts or
+    .pages is not such a call: a loop that only reads them and sleeps never
+    sees a page that appeared after connecting (the Settings or Watch
+    together page, or the start screen itself on a slow runner). A question
+    to the browser is.
+    """
+    session = _sessions.get(id(browser))
+    if session is None:
+        session = _sessions[id(browser)] = browser.new_browser_cdp_session()
+    session.send("Browser.getVersion")
+
+
 def find_page(browser, address):
     """The app's page at `address` (any of its windows), or None."""
+    take_in_news(browser)
     for context in browser.contexts:
         for page in context.pages:
             if page.url.split("#")[0].split("?")[0] == address:
@@ -161,7 +181,11 @@ def settings_window(copy, home):
     settings.wait_for_load_state()
     window = wait_for("the Settings window", lambda: windows_of(copy.process.pid, "YtMiniPlayerSettings"))[0]
     check(wait_for("it to show", lambda: visible(window), timeout=5), "the gear opens the Settings window")
-    switch = settings.wait_for_selector('[data-setting="pin"]', timeout=10000)
+    # Settings opens on General; "Always on top" is under Window.
+    settings.click("#tab-window")
+    # A locator, not an element: the page is redrawn after every change.
+    switch = settings.locator('[data-setting="pin"]')
+    switch.wait_for(timeout=10000)
     check((switch.get_attribute("aria-checked") == "true") == before, "Always on top shows the player's real state")
     switch.click()
     check(wait_for("the player to change", lambda: topmost(player) != before, timeout=5) is True,
@@ -196,19 +220,21 @@ def watch_together(host, host_home, guest, guest_home, relay):
     host_panel.fill("#name", "Host")
     host_panel.click("#start")
     code = wait_for("the room's code", lambda: host_panel.inner_text("#code-text").strip(), timeout=20)
-    check(len(code.replace("-", "").replace(" ", "")) == 12, f"the host gets a code ({code})")
+    # Shown in groups with a dash of their own between them (N5J9 – S6HE – AFQ6).
+    letters = "".join(ch for ch in code if ch.isalnum())
+    check(len(letters) == 12, f"the host gets a code ({letters})")
     guest_panel.fill("#name", "Guest")
     guest_panel.fill("#code", code)
     guest_panel.click("#join")
     check(wait_for("the guest to be in", lambda: guest_panel.is_visible("#v-guest"), timeout=20) is True,
           "the second copy joins with the code")
-    check(wait_for("the host to see the guest",
-                   lambda: len(host_panel.query_selector_all("#host-people li")) == 2, timeout=20) is True,
-          "the host sees the guest")
+    # People only: while the host is alone, the list has a "nobody yet" line.
+    people = lambda: len(host_panel.query_selector_all("#host-people li:not(.empty)"))
+    check(wait_for("the host to see the guest", lambda: people() == 2, timeout=20) is True
+          and "Guest" in host_panel.inner_text("#host-people"), "the host sees the guest")
     check("Host" in guest_panel.inner_text("#guest-people"), "the guest sees the host by name")
     guest_panel.click("#leave")
-    check(wait_for("the guest to leave",
-                   lambda: len(host_panel.query_selector_all("#host-people li")) == 1, timeout=20) is True,
+    check(wait_for("the guest to leave", lambda: people() == 1, timeout=20) is True,
           "leaving: the host sees it")
 
 
@@ -227,6 +253,15 @@ def self_test():
         found = find_page(browser, SETTINGS)
         check(found is not None and found.inner_text("#x") == "ok", "the page is found by its address")
         check(find_page(browser, TOGETHER) is None, "and only that one")
+        # Like the app opening a window: a page that appears after
+        # connecting, made without going through this Playwright connection.
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?about:blank", method="PUT")
+        urllib.request.urlopen(request, timeout=5).close()
+        try:
+            later = wait_for("the new page", lambda: find_page(browser, "about:blank"), timeout=5)
+        except TimeoutError:
+            later = None
+        check(later is not None, "a page that appears after connecting is found too")
         try:
             wait_for("nothing", lambda: None, timeout=0.5)
             check(False, "waiting gives up")
