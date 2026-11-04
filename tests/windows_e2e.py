@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -84,6 +85,19 @@ def take_in_news(browser):
     if session is None:
         session = _sessions[id(browser)] = browser.new_browser_cdp_session()
     session.send("Browser.getVersion")
+
+
+def relay_answers(relay):
+    """Fails at once, saying so, when nothing answers at the relay's address:
+    otherwise the host would only wait for a code that never comes."""
+    address = "http" + relay[2:]  # ws:// -> http://, wss:// -> https://
+    try:
+        urllib.request.urlopen(address.rstrip("/") + "/", timeout=5).close()
+    except urllib.error.HTTPError:
+        pass  # an answer (the worker's 404 for /): it is up
+    except OSError as error:
+        raise RuntimeError(f"nothing answers at the relay {relay} ({error}); "
+                           "start it in server/together-relay: npx wrangler dev --port 8799") from None
 
 
 def find_page(browser, address):
@@ -213,6 +227,7 @@ def set_relay(panel, relay):
 
 def watch_together(host, host_home, guest, guest_home, relay):
     print("Watch together (two copies)")
+    relay_answers(relay)
     host_panel = open_together(host, host_home, "host")
     guest_panel = open_together(guest, guest_home, "guest")
     for panel in (host_panel, guest_panel):

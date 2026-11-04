@@ -84,21 +84,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Local relay (wrangler dev)
+      - name: Relay and Playwright
         shell: pwsh
-        working-directory: server/together-relay
         run: |
-          npm install --no-audit --no-fund
-          Start-Process -FilePath npx.cmd -ArgumentList 'wrangler', 'dev', '--port', '8799', '--ip', '127.0.0.1' -RedirectStandardOutput "$env:RUNNER_TEMP\wrangler.log" -RedirectStandardError "$env:RUNNER_TEMP\wrangler.err"
-          $deadline = (Get-Date).AddSeconds(60)
-          while ((Get-Date) -lt $deadline) {
-            try { Invoke-WebRequest -Uri http://127.0.0.1:8799/ -UseBasicParsing -TimeoutSec 2 | Out-Null; break } catch { if ($_.Exception.Response) { break } }
-            Start-Sleep -Seconds 1
-          }
-      - name: Start, Settings and Watch together on the real app
-        run: |
+          npm install --prefix server/together-relay --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
           pip install playwright==1.47.0
-          python tests/windows_e2e.py --exe target/release/yt-mini-player.exe --relay ws://127.0.0.1:8799
+          if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
+      # The local relay (wrangler dev) starts in this same step, so nothing
+      # between steps can stop it, and its log is shown if anything fails.
+      - name: Start, Settings and Watch together on the real app
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\wrangler.log"
+          $err = "$env:RUNNER_TEMP\wrangler.err"
+          $relay = Start-Process -FilePath node -ArgumentList 'node_modules/wrangler/bin/wrangler.js', 'dev', '--port', '8799', '--ip', '127.0.0.1' -WorkingDirectory server/together-relay -RedirectStandardOutput $log -RedirectStandardError $err -PassThru
+          $null = $relay.Handle  # keeps its exit code readable once it has exited
+          # Up when the worker answers (any HTTP status, its 404 for / too).
+          # The first start on a fresh runner can be slow: up to 3 minutes.
+          $started = Get-Date
+          $up = $false
+          while (-not $up -and -not $relay.HasExited -and ((Get-Date) - $started).TotalSeconds -lt 180) {
+            try { Invoke-WebRequest -Uri http://127.0.0.1:8799/ -UseBasicParsing -TimeoutSec 5 | Out-Null; $up = $true }
+            catch { if ($_.Exception.Response) { $up = $true } else { Start-Sleep -Seconds 1 } }
+          }
+          $code = 1
+          if ($up) {
+            "Relay up after $([int]((Get-Date) - $started).TotalSeconds) s"
+            python tests/windows_e2e.py --exe target/release/yt-mini-player.exe --relay ws://127.0.0.1:8799
+            $code = $LASTEXITCODE
+          } else {
+            "::error::The local relay does not answer on 127.0.0.1:8799 (wrangler $(if ($relay.HasExited) { "exited with $($relay.ExitCode)" } else { 'still starting after 3 minutes' }))."
+          }
+          if ($code -ne 0) {
+            '--- relay log (wrangler dev) ---'
+            Get-Content $log, $err -ErrorAction SilentlyContinue | Select-Object -Last 200
+          }
+          if (-not $relay.HasExited) { taskkill /T /F /PID $relay.Id | Out-Null }
+          exit $code
 
   # The watch together relay, on a local copy of Cloudflare's runtime.
   relay:
