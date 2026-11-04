@@ -385,6 +385,14 @@ It 'checksum: without SHA256SUMS.txt it only warns' {
     Expect ($warnings.Count -eq 1 -and $warnings[0].Message -eq (T 'NoSums')) 'no warning'
 }
 
+It 'checksum: the overlay copy is never installed without SHA256SUMS.txt' {
+    $Lang = 'en'
+    $c = New-SumsCase 'yt-mini-player-uia.exe' $null
+    $script:SumsDir = $c.Folder
+    $thrown = Get-Thrown { Test-Checksum $c.File 'yt-mini-player-uia.exe' -Required }
+    Expect ($thrown -eq (T 'NoSums')) "threw: $thrown"
+}
+
 It 'checksum: a changed byte is caught' {
     $Lang = 'en'
     $c = New-SumsCase 'yt-mini-player.exe' "{hash}  yt-mini-player.exe`n"

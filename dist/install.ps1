@@ -329,11 +329,27 @@ function T([string]$Key) {
 # Helpers
 # ---------------------------------------------------------------------------
 
+# The elevated part writes its log through one handle, on a file it creates
+# itself (CreateNew fails if anything, a link included, is already there).
+# The log is in the user's Temp folder: opening the path again for every
+# line would let another program swap it for a link between two lines and
+# have this administrator process write somewhere else.
+$script:LogWriter = $null
+if ($LogPath) {
+    try {
+        $stream = [IO.FileStream]::new($LogPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+        $script:LogWriter = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+        $script:LogWriter.AutoFlush = $true
+    } catch {
+        $script:LogWriter = $null
+    }
+}
+
 # A message for the user; in the elevated part it also goes to the log the
 # original window shows afterwards.
 function Say([string]$Text) {
     Write-Host $Text
-    if ($LogPath) { Add-Content -Path $LogPath -Value $Text -Encoding UTF8 }
+    if ($script:LogWriter) { $script:LogWriter.WriteLine($Text) }
 }
 
 function Test-Admin {
@@ -421,9 +437,12 @@ function Remove-OverlayCertificates {
 
 # Checks `$Path` against `$Name`'s line in SHA256SUMS.txt (sha256sum format:
 # "<hash>  <name>"). Without the fingerprint file it only warns.
-function Test-Checksum([string]$Path, [string]$Name) {
+# -Required: the overlay copy is signed and trusted by Windows (UIAccess),
+# so it is never installed unchecked.
+function Test-Checksum([string]$Path, [string]$Name, [switch]$Required) {
     $sums = Join-Path $PSScriptRoot 'SHA256SUMS.txt'
     if (-not (Test-Path $sums)) {
+        if ($Required) { throw (T 'NoSums') }
         Write-Warning (T 'NoSums')
         return
     }
@@ -466,9 +485,9 @@ function Install-Machine {
         # The COPY is checked, already in Program Files: nobody without
         # administrator rights can change it between the check and the
         # signature.
-        Test-Checksum $MachineExe $UiaExeName
+        Test-Checksum $MachineExe $UiaExeName -Required
         $machineLoader = Join-Path $MachineDir 'WebView2Loader.dll'
-        if (Test-Path $machineLoader) { Test-Checksum $machineLoader 'WebView2Loader.dll' }
+        if (Test-Path $machineLoader) { Test-Checksum $machineLoader 'WebView2Loader.dll' -Required }
 
         Remove-OverlayCertificates
         # Signed by the publisher (an official release): Windows already
