@@ -15,13 +15,24 @@
 //! before asking the server (Luhn mod 32 catches every single wrong
 //! character and almost every swap of two neighbours).
 //!
-//! The server never sees the code: guests look the room up by
-//! `SHA-256("ytmp-together/lookup/v1" ‖ code)`, and the code is also the
-//! secret of the first, encrypted message between guest and host
-//! (`join_key`, an HKDF of the code).
+//! The server never sees the code. Both secrets that come from it go
+//! through Argon2id first (19 MiB, 2 passes), then HKDF:
+//!
+//! ```text
+//! M        = Argon2id(code, "ytmp-together/code-kdf/v2", 19 MiB, t = 2, p = 1)
+//! lookup   = HKDF-SHA256(M, "ytmp-together/v2", "lookup")   what the room is found by
+//! join_key = HKDF-SHA256(M, "ytmp-together/v2", "join")     the first message's key
+//! ```
+//!
+//! The relay sees the lookup. With a fast hash it could try all 2⁵⁵ codes
+//! within the half hour one lasts (a few hundred rented GPUs); Argon2id makes
+//! every guess cost 19 MiB and tens of milliseconds, so that is out of reach.
+
+use std::sync::{Arc, OnceLock};
 
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
+use zeroize::Zeroizing;
 
 /// How long a code lasts.
 pub const PERIOD_SECS: u64 = 30 * 60;
@@ -33,8 +44,33 @@ const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const DATA_CHARS: usize = 11;
 pub const CODE_CHARS: usize = DATA_CHARS + 1;
 const CODE_LABEL: &[u8] = b"ytmp-together/code/v1";
-const LOOKUP_LABEL: &[u8] = b"ytmp-together/lookup/v1";
-const JOIN_SALT: &[u8] = b"ytmp-together/v1";
+const KDF_SALT: &[u8] = b"ytmp-together/code-kdf/v2";
+const HKDF_SALT: &[u8] = b"ytmp-together/v2";
+/// Argon2id's cost per code: OWASP's minimum for passwords.
+pub const KDF_MEMORY_KIB: u32 = 19 * 1024;
+pub const KDF_PASSES: u32 = 2;
+const _: () = assert!(KDF_MEMORY_KIB >= 19 * 1024 && KDF_PASSES >= 2, "OWASP's minimum for Argon2id");
+
+/// Argon2id of the code (32 bytes).
+fn master_with(code: &str, memory_kib: u32, passes: u32) -> Zeroizing<[u8; 32]> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(memory_kib, passes, 1, Some(32)).expect("valid Argon2 parameters");
+    let mut out = Zeroizing::new([0u8; 32]);
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        .hash_password_into(code.as_bytes(), KDF_SALT, out.as_mut_slice())
+        .expect("valid Argon2 lengths");
+    out
+}
+
+/// The tests make hundreds of codes, so there the cost is light; the real
+/// one is pinned by `fixed_vector`.
+fn master(code: &str) -> Zeroizing<[u8; 32]> {
+    if cfg!(test) {
+        master_with(code, 64, 1)
+    } else {
+        master_with(code, KDF_MEMORY_KIB, KDF_PASSES)
+    }
+}
 
 /// The 30-minute window a moment belongs to.
 pub fn window(unix_secs: u64) -> u64 {
@@ -47,8 +83,17 @@ pub fn window_end(window: u64) -> u64 {
 }
 
 /// A valid code: 12 characters of the alphabet, check character included.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Code(String);
+/// Its Argon2id result is worked out once and shared by its copies.
+#[derive(Clone)]
+pub struct Code(String, Arc<OnceLock<Zeroizing<[u8; 32]>>>);
+
+impl PartialEq for Code {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for Code {}
 
 impl std::fmt::Debug for Code {
     // Never in logs whole.
@@ -78,7 +123,11 @@ impl Code {
         let bits = u64::from_be_bytes(tag[..8].try_into().expect("8 bytes")) >> (64 - 5 * DATA_CHARS as u32);
         let mut digits: Vec<u8> = (0..DATA_CHARS).rev().map(|i| ((bits >> (5 * i)) & 31) as u8).collect();
         digits.push(check_digit(&digits));
-        Code(digits.into_iter().map(|d| ALPHABET[d as usize] as char).collect())
+        Code::from_digits(digits)
+    }
+
+    fn from_digits(digits: Vec<u8>) -> Self {
+        Code(digits.into_iter().map(|d| ALPHABET[d as usize] as char).collect(), Arc::default())
     }
 
     /// Reads what someone typed: any case, with or without spaces or
@@ -106,7 +155,7 @@ impl Code {
         if !luhn_valid(&digits) {
             return Err(CodeError::Check);
         }
-        Ok(Code(digits.into_iter().map(|d| ALPHABET[d as usize] as char).collect()))
+        Ok(Code::from_digits(digits))
     }
 
     /// For people: `K7Q4-9XM2-PF3T`.
@@ -116,15 +165,17 @@ impl Code {
 
     /// What the server knows the room by (64 hex characters).
     pub fn lookup(&self) -> String {
-        let mut hash = Sha256::new();
-        hash.update(LOOKUP_LABEL);
-        hash.update(self.0.as_bytes());
-        hex(&hash.finalize())
+        hex(&super::crypto::hkdf(self.master().as_slice(), HKDF_SALT, b"lookup"))
+    }
+
+    /// Argon2id of the code, worked out the first time it is needed.
+    fn master(&self) -> &Zeroizing<[u8; 32]> {
+        self.1.get_or_init(|| master(&self.0))
     }
 
     /// Key of the first message between guest and host.
     pub fn join_key(&self) -> [u8; 32] {
-        super::crypto::hkdf(self.0.as_bytes(), JOIN_SALT, b"join")
+        super::crypto::hkdf(self.master().as_slice(), HKDF_SALT, b"join")
     }
 }
 
@@ -183,11 +234,17 @@ mod tests {
 
     #[test]
     fn fixed_vector() {
-        // Pins the algorithm (worked out separately, in Python's hmac and
-        // hashlib): a change here would break codes between versions.
+        // Pins the algorithm (worked out separately, with Python's
+        // argon2-cffi, hmac and hashlib): a change here would break codes
+        // between versions.
         let code = Code::for_window(&SECRET, 987_654);
         assert_eq!(code.display(), "PTQ7-K20N-PW5J");
-        assert_eq!(code.lookup(), "0314231bc05e38b86467399c7b5a597df14639b1cc0f690c7e937f072f77a01c");
+        let real = master_with(&code.0, KDF_MEMORY_KIB, KDF_PASSES);
+        assert_eq!(hex(&super::super::crypto::hkdf(real.as_slice(), HKDF_SALT, b"lookup")), "d8768cf9032a368c73e24e53e83d04ee918dd4bed8aef821d09b2748a1b584a2");
+        assert_eq!(hex(&super::super::crypto::hkdf(real.as_slice(), HKDF_SALT, b"join")), "338f2242610e4225752d7414ef41a8bd9ef4d872beff3fc2ed85e860d03b290c");
+        // The light cost the tests use.
+        assert_eq!(code.lookup(), "e6426934a25cb8ad794e2505469d4c9c252297cb0e62acc1e0817b59ce3cddc7");
+        assert_eq!(hex(&code.join_key()), "6b46e37d5452274f765e1e644b944d1d0d1fef15e246450bde8e501cdc0f803f");
     }
 
     #[test]

@@ -256,6 +256,9 @@ pub struct Host {
     collisions: u32,
     ice: Vec<IceServer>,
     ice_asked: bool,
+    /// Asked again once the first guest was in: the relay only hands out
+    /// TURN to rooms someone has joined.
+    ice_again: bool,
     /// The window is being captured and sent (the app follows this).
     capturing: bool,
     bitrate: u32,
@@ -302,6 +305,7 @@ impl Host {
             collisions: 0,
             ice: Vec::new(),
             ice_asked: false,
+            ice_again: false,
             capturing: false,
             bitrate: 0,
         }
@@ -634,6 +638,10 @@ impl Host {
         seat.connected = true;
         let name = display_name(&seat.id, &seat.name);
         let mut outs = vec![Out::Relay(out::send_to(from, &to_value(&welcome))), Out::Toast(t!("together.toast_joined", name = name))];
+        let has_turn = self.ice.iter().any(|s| s.urls.iter().any(|u| u.starts_with("turn")));
+        if !has_turn && !std::mem::replace(&mut self.ice_again, true) {
+            outs.push(Out::Relay(out::ice()));
+        }
         outs.extend(self.broadcast_members());
         outs.extend(self.send_state(now));
         outs
@@ -1702,6 +1710,25 @@ mod tests {
     }
 
     const SDP: &str = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
+
+    #[test]
+    fn the_host_asks_for_turn_again_once_someone_is_in() {
+        let mut relay = Relay::new();
+        let mut host = Host::new("Rodrigo", Mode::Share, now(0));
+        let outs = host.on_relay(RelayIn::Ready { guests: vec![] }, now(0));
+        relay.deliver(&outs, &mut [], now(0));
+        // Nobody in the room yet: the relay answers with STUN only.
+        host.on_relay(RelayIn::Ice { servers: default_ice_servers() }, now(0));
+        let asks = |outs: &[Out]| relays(outs).iter().filter(|f| f["op"] == "ice").count();
+        let mut ana = Guest::new(host.code().clone(), "Ana");
+        let (a, hello) = relay.join(&mut host, &mut ana, now(100));
+        let back = guest_to_host(&mut relay, &mut host, &a, &hello, &mut [(&a, &mut ana)], now(100));
+        assert_eq!(asks(&back), 1, "asked again with Ana in");
+        let mut bruno = Guest::new(host.code().clone(), "Bruno");
+        let (b, hello) = relay.join(&mut host, &mut bruno, now(200));
+        let back = guest_to_host(&mut relay, &mut host, &b, &hello, &mut [(&b, &mut bruno)], now(200));
+        assert_eq!(asks(&back), 0, "only once");
+    }
 
     #[test]
     fn sharing_the_window_with_three_guests() {

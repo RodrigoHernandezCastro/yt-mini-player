@@ -495,6 +495,41 @@ pub const RISKY: &[&str] = &[
     "delete", "profile", "manage", "redeem", "gift",
 ];
 
+/// Does the path hold one of the [`RISKY`] words, read as the site reads
+/// it? Percent escapes are decoded first (until nothing changes, so neither
+/// `/Sign%4Fut` nor `/Sign%254Fut` hides "signout").
+pub fn is_risky_path(path: &str) -> bool {
+    let mut text = path.to_owned();
+    for _ in 0..4 {
+        let decoded = percent_decoded(&text);
+        if decoded == text {
+            break;
+        }
+        text = decoded;
+    }
+    let text = text.to_lowercase();
+    RISKY.iter().any(|w| text.contains(w))
+}
+
+fn percent_decoded(text: &str) -> String {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// The address a guest may open by itself: https, a catalog service, no
 /// query except YouTube's `v` and `list`, and no account pages.
 pub fn follow_url(text: &str) -> Option<Url> {
@@ -506,8 +541,7 @@ pub fn follow_url(text: &str) -> Option<Url> {
         return None;
     }
     crate::services::for_url(&url)?;
-    let path = url.path().to_ascii_lowercase();
-    if RISKY.iter().any(|w| path.contains(w)) || url.fragment().is_some() {
+    if is_risky_path(url.path()) || url.fragment().is_some() {
         return None;
     }
     let host = url.host_str()?.to_ascii_lowercase();
@@ -623,8 +657,12 @@ mod tests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ&action=x",
             "https://www.youtube.com/watch?v=short",
             "https://www.netflix.com/SignOut",
+            "https://www.netflix.com/Sign%4Fut",
+            "https://www.netflix.com/Sign%254Fut",
+            "https://www.netflix.com/acc%6Funt",
             "https://www.netflix.com/YourAccount",
             "https://www.primevideo.com/settings",
+            "https://www.primevideo.com/%73ettings",
             "https://www.netflix.com/watch/1?x=1",
             "https://www.netflix.com/watch/1#frag",
             "https://user@www.netflix.com/watch/1",

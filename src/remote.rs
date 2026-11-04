@@ -397,12 +397,10 @@ pub fn page_allows_input(url: &str) -> bool {
     if host == crate::services::HOME_HOST {
         return url.path() == "/";
     }
-    let path = url.path().to_ascii_lowercase();
-    let risky = |text: &str| crate::together::protocol::RISKY.iter().any(|w| text.contains(w));
     let sign_in_host = ["accounts.", "login.", "signin.", "auth.", "id.", "account.", "pay.", "checkout."]
         .iter()
         .any(|p| host.starts_with(p));
-    !risky(&path) && !sign_in_host && !host.starts_with("myaccount")
+    !crate::together::protocol::is_risky_path(url.path()) && !sign_in_host && !host.starts_with("myaccount")
 }
 
 #[cfg(test)]
@@ -560,6 +558,8 @@ mod tests {
             "https://accounts.google.com/signin",
             "https://www.youtube.com/account",
             "https://www.netflix.com/YourAccount",
+            "https://www.netflix.com/YourAcc%6Funt",
+            "https://www.netflix.com/Sign%254Fut",
             "https://www.youtube.com/paid_memberships?ybp=1",
             "https://www.primevideo.com/settings",
             "https://login.microsoftonline.com/",
