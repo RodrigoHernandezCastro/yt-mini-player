@@ -10,7 +10,7 @@ from bundle import HOST_KEY, IPC_STUB, LANGUAGES, fill, i18n, strings
 from cases.common import heap_used, locale_payload, open_menu
 from cases.together_more import base_views, together_page
 from home_e2e import home_html
-from suite import LANGS, SECTIONS, SIDEBAR_HOST, SRC, each, expect, settings_state, shadow, test
+from suite import LANGS, SECTIONS, SIDEBAR_HOST, SRC, each, expect, own_long_tasks, settings_state, shadow, test
 
 LONGTASKS = ("window.__long = []; new PerformanceObserver((l) => l.getEntries().forEach((e) => "
              "window.__long.push(Math.round(e.duration)))).observe({ type: 'longtask', buffered: true });")
@@ -87,10 +87,9 @@ def _(env, section):
     page.add_init_script("window.__sent = []; Object.defineProperty(window, 'ipc', { value: Object.freeze({ "
                          "postMessage: (m) => window.__sent.push(String(m)) }) });")
     env.serve(page, fill("settings.html", {"i18n": i18n("en", "settings")}))
-    page.goto("https://ytmp.localhost/settings")
-    page.evaluate("(state) => window.__ytmpSettings(state)", dict(settings_state(), section=section))
-    page.wait_for_timeout(150)
-    expect(page.evaluate("window.__long") == [], page.evaluate("window.__long"))
+    tasks = own_long_tasks(page, "https://ytmp.localhost/settings", settle=150, after=lambda: page.evaluate(
+        "(state) => window.__ytmpSettings(state)", dict(settings_state(), section=section)))
+    expect(tasks == [], tasks)
 
 
 @each("performance", "settings › {1} in {0}: under 400 elements", [(l, s) for l in LANGS for s in SECTIONS])
@@ -113,9 +112,8 @@ def _(env, lang):
     page.add_init_script(LONGTASKS)
     page.add_init_script(IPC_STUB)
     env.serve(page, home_html(lang=lang, welcome=True))
-    page.goto("https://ytmp.localhost/")
-    page.wait_for_timeout(200)
-    expect(page.evaluate("window.__long") == [], page.evaluate("window.__long"))
+    tasks = own_long_tasks(page, "https://ytmp.localhost/")
+    expect(tasks == [], tasks)
 
 
 @each("performance", "{0} in {1}: no request leaves the app", [(k, l) for k in ("home", "settings", "welcome") for l in LANGS])
