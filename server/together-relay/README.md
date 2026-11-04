@@ -36,8 +36,12 @@ The app wants it as `wss://ytmp-together.<your-subdomain>.workers.dev`:
 **Updating from 0.9:** run `npx wrangler deploy` again. YT Mini Player 0.10 needs this version
 (rooms of six, the `ice` operation, bigger messages for the connection offers).
 
-Optional: uncomment the `[[ratelimits]]` block in `wrangler.toml` to limit how often one
-address may try codes (a code has 55 random bits, so guessing is hopeless anyway).
+**Limits per address** (on by default, in `wrangler.toml`): one address may try 20 codes,
+open 10 rooms and get 10 TURN logins a minute. Anyone can reach the relay, so without them a
+stranger could open rooms by the thousand (using up the free plan's daily requests, which
+stops Watch together for everyone) or just to collect TURN logins that you pay for. They use
+Workers rate limiting; remove a `[[ratelimits]]` block to turn that limit off, or set the
+variable `RATE_LIMITS = "off"` to turn them all off (the tests do).
 
 ### Optional: TURN, for strict networks
 
@@ -56,8 +60,10 @@ some routers) need a **TURN** relay in between. Cloudflare's is free up to 1,000
    ```
 
 From then on, each member of a room gets short-lived TURN credentials (8 hours) along with the
-STUN servers, and WebRTC uses them only when a direct connection fails. Only people already in
-a room can ask (three times per connection). TURN sees only encrypted packets.
+STUN servers, and WebRTC uses them only when a direct connection fails. They only go to rooms
+someone has joined (a host alone gets STUN, and asks again when its first guest is in), three
+times per connection and 10 a minute per address. TURN sees only encrypted packets. In the
+Cloudflare dashboard you can also set a usage alert for TURN.
 
 ## Protocol
 

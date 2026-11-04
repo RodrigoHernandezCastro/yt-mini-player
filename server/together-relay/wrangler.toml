@@ -23,9 +23,21 @@ new_sqlite_classes = ["Room", "Lobby"]
 [observability]
 enabled = false
 
-# Optional: limits how often one address may try codes. Uncomment if your
-# account has Workers rate limiting.
-# [[ratelimits]]
-# name = "JOIN_LIMIT"
-# namespace_id = "1001"
-# simple = { limit = 20, period = 60 }
+# Limits per address (Workers rate limiting): how often one address may try
+# codes, open rooms and get TURN logins. Without them anyone could guess
+# codes at full speed, or open rooms just to take TURN logins that you pay
+# for. A block removed turns its limit off.
+[[ratelimits]]
+name = "JOIN_LIMIT"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "HOST_LIMIT"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "ICE_LIMIT"
+namespace_id = "1003"
+simple = { limit = 10, period = 60 }

@@ -114,8 +114,37 @@ async function join(base, lookup) {
   return { guest, you };
 }
 
+// `--limits`: only the per-address limits, with them on (as deployed).
+const LIMITS = process.argv.includes('--limits');
 const tests = [];
+const limitTests = [];
 const test = (name, fn) => tests.push({ name, fn });
+const limitTest = (name, fn) => limitTests.push({ name, fn });
+
+limitTest('without someone in the room, no TURN (and STUN only without a TURN key)', async (base) => {
+  const { host } = await startHost(base);
+  host.send({ op: 'ice' });
+  const { servers } = await host.next('ice');
+  assert.ok(servers.length >= 1 && servers.every((s) => s.urls.every((u) => /^stun:/.test(u))), JSON.stringify(servers));
+  host.send({ op: 'end' });
+});
+
+limitTest('one address may not open rooms or guess codes without end', async (base) => {
+  // wrangler.toml: 10 rooms and 20 code guesses a minute per address.
+  const until429 = async (tries, open) => {
+    let fine = 0;
+    for (let i = 0; i < tries; i += 1) {
+      const status = await open();
+      if (status === 429) return fine;
+      fine += 1;
+    }
+    throw new Error(`never refused in ${tries} tries`);
+  };
+  const rooms = await until429(11, () => refused(base, `/v1/host/${hex(16)}`, { 'X-Ytmp-Host': hex(32) }));
+  assert.ok(rooms <= 10, `${rooms} rooms in a minute`);
+  const guesses = await until429(21, () => refused(base, `/v1/join/${hex(32)}`));
+  assert.ok(guesses <= 20, `${guesses} guesses in a minute`);
+});
 
 test('health and bad paths', async (base, http) => {
   assert.equal(await (await fetch(`${http}/v1/health`)).text(), 'ok');
@@ -389,7 +418,9 @@ async function startRelay() {
   if (!existsSync(WRANGLER)) throw new Error(`wrangler is not installed in ${HERE} (run npm install first)`);
   child = spawn(
     process.execPath,
-    [WRANGLER, 'dev', '--ip', '127.0.0.1', '--port', String(PORT), '--var', `HOST_GRACE_MS:${HOST_GRACE_MS}`, '--var', `GUEST_GRACE_MS:${GUEST_GRACE_MS}`],
+    // The tests open dozens of rooms a minute from one address: the
+    // per-address limits are off, except for the run that checks them.
+    [WRANGLER, 'dev', '--ip', '127.0.0.1', '--port', String(PORT), '--var', `HOST_GRACE_MS:${HOST_GRACE_MS}`, '--var', `GUEST_GRACE_MS:${GUEST_GRACE_MS}`, ...(LIMITS ? [] : ['--var', 'RATE_LIMITS:off'])],
     {
       cwd: HERE,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -425,7 +456,8 @@ async function main() {
   const base = process.env.RELAY || (await startRelay());
   const http = base.replace(/^ws/, 'http');
   let failed = 0;
-  for (const { name, fn } of tests) {
+  const chosen = LIMITS ? limitTests : tests;
+  for (const { name, fn } of chosen) {
     try {
       await fn(base, http);
       console.log(`ok - ${name}`);
@@ -434,7 +466,7 @@ async function main() {
       console.log(`FAIL - ${name}\n  ${err.stack}`);
     }
   }
-  console.log(failed ? `${failed} failed` : `all ${tests.length} passed`);
+  console.log(failed ? `${failed} failed` : `all ${chosen.length} passed`);
   return failed;
 }
 

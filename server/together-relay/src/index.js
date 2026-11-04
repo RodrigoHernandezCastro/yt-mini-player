@@ -17,7 +17,9 @@
 // Window sharing: the pictures and sound go straight between the apps
 // (WebRTC); the relay only hands out the servers that help them find each
 // other (`ice`): public STUN, plus Cloudflare's TURN if this worker has the
-// TURN_KEY_ID and TURN_KEY_API_TOKEN secrets (see README.md).
+// TURN_KEY_ID and TURN_KEY_API_TOKEN secrets (see README.md), only to rooms
+// someone has joined. One address may only open so many rooms, try so many
+// codes and get so many TURN logins a minute (wrangler.toml).
 
 import { DurableObject } from 'cloudflare:workers';
 
@@ -50,6 +52,23 @@ async function sha256(value) {
 function randomHex(bytes) {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+// Workers rate limiting (the [[ratelimits]] blocks in wrangler.toml), per
+// client. Off without its binding, or with RATE_LIMITS = "off" (a variable
+// only whoever deploys the relay can set; the tests use it).
+async function limited(env, binding, client) {
+  const limiter = env[binding];
+  if (!limiter || env.RATE_LIMITS === 'off') return false;
+  try {
+    const { success } = await limiter.limit({ key: client });
+    return !success;
+  } catch {
+    return false;
+  }
+}
+
+// The worker's hash of the client (X-Relay-Client, set by the worker only).
+const clientOf = (request) => request.headers.get('X-Relay-Client') || 'unknown';
 
 function graceMs(env, name, fallback) {
   const value = Number(env[name]);
@@ -107,18 +126,21 @@ export default {
       return stub.fetch(new Request(request.url, { method: 'GET', headers }));
     };
 
-    if (kind === 'host' && ROOM_ID.test(id)) return forward(id, 'host');
-    if (kind === 'rejoin' && ROOM_ID.test(id)) return forward(id, 'rejoin');
+    // Who is asking, as the rooms see it: a hash, never the address itself.
+    const client = (await sha256(`ytmp-relay|${request.headers.get('CF-Connecting-IP') || 'unknown'}`)).slice(0, 32);
+
+    if (kind === 'host' && ROOM_ID.test(id)) {
+      // Anyone can open a room: one address may not open dozens a minute.
+      if (await limited(env, 'HOST_LIMIT', client)) return text(429, 'slow down');
+      return forward(id, 'host', { 'X-Relay-Client': client });
+    }
+    if (kind === 'rejoin' && ROOM_ID.test(id)) return forward(id, 'rejoin', { 'X-Relay-Client': client });
     if (kind === 'join' && HEX64.test(id)) {
-      // Optional: a Workers rate limiting binding against guessing.
-      if (env.JOIN_LIMIT) {
-        const key = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const { success } = await env.JOIN_LIMIT.limit({ key });
-        if (!success) return text(429, 'slow down');
-      }
+      // Against guessing codes.
+      if (await limited(env, 'JOIN_LIMIT', client)) return text(429, 'slow down');
       const room = await env.LOBBY.get(env.LOBBY.idFromName(id)).resolve();
       if (!room) return text(404, 'no such code');
-      return forward(room, 'guest');
+      return forward(room, 'guest', { 'X-Relay-Client': client });
     }
     return text(404, 'not found');
   },
@@ -185,7 +207,7 @@ export class Room extends DurableObject {
     const role = request.headers.get('X-Relay-Role');
     const room = request.headers.get('X-Relay-Room') || '';
     if (role === 'host') return this.connectHost(request, room);
-    if (role === 'guest') return this.connectGuest();
+    if (role === 'guest') return this.connectGuest(request);
     if (role === 'rejoin') return this.rejoin(request);
     return text(400, 'bad request');
   }
@@ -204,7 +226,7 @@ export class Room extends DurableObject {
     for (const old of this.sockets('host')) this.close(old, 4002, 'replaced');
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server, ['host']);
-    server.serializeAttachment({ role: 'host', member: 'host' });
+    server.serializeAttachment({ role: 'host', member: 'host', client: clientOf(request) });
     const away = await this.ctx.storage.get('away');
     await this.ctx.storage.delete('away');
     const guests = [...new Set(this.guestSockets().map((ws) => this.member(ws)))];
@@ -214,7 +236,7 @@ export class Room extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async connectGuest() {
+  async connectGuest(request) {
     const ticket = randomHex(32);
     const ticketHash = await sha256(ticket);
     const meta = await this.ctx.storage.get('meta');
@@ -229,7 +251,7 @@ export class Room extends DurableObject {
     await this.ctx.storage.put({ meta, seats });
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server, [member]);
-    server.serializeAttachment({ role: 'guest', member });
+    server.serializeAttachment({ role: 'guest', member, client: clientOf(request) });
     this.send(server, { op: 'you', member, ticket, room: meta.room });
     this.send(host, { op: 'joined', member });
     return new Response(null, { status: 101, webSocket: client });
@@ -250,7 +272,7 @@ export class Room extends DurableObject {
     await this.ctx.storage.put('seats', seats);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server, [member]);
-    server.serializeAttachment({ role: 'guest', member });
+    server.serializeAttachment({ role: 'guest', member, client: clientOf(request) });
     this.send(server, { op: 'you', member, ticket, room: meta.room });
     const host = this.host();
     if (host) this.send(host, { op: 'joined', member, resumed: true });
@@ -279,11 +301,23 @@ export class Room extends DurableObject {
     else if (attachment.role === 'guest') await this.fromGuest(ws, attachment.member, msg);
   }
 
+  // TURN logins cost whoever runs the relay (by the gigabyte), so they only
+  // go to rooms someone has joined, and one address gets only so many a
+  // minute. Everyone else gets the public STUN servers.
   async ice(ws) {
     const asked = (this.iceAsks.get(ws) || 0) + 1;
     this.iceAsks.set(ws, asked);
     if (asked > ICE_ASKS) return;
-    this.send(ws, { op: 'ice', servers: await iceServers(this.env) });
+    let servers = STUN;
+    if (this.env.TURN_KEY_ID && this.env.TURN_KEY_API_TOKEN) {
+      const attachment = ws.deserializeAttachment() || {};
+      const seats = (await this.ctx.storage.get('seats')) || {};
+      const someone = attachment.role === 'guest' || Object.keys(seats).length > 0;
+      if (someone && !(await limited(this.env, 'ICE_LIMIT', attachment.client || 'unknown'))) {
+        servers = await iceServers(this.env);
+      }
+    }
+    this.send(ws, { op: 'ice', servers });
   }
 
   async fromHost(ws, msg) {
