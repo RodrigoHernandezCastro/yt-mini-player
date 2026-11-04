@@ -7,40 +7,57 @@
     WebView2 loader is linked into the .exe, so the package does not need
     WebView2Loader.dll.
 
+.PARAMETER BuildOnly
+    Only builds both programs (and checks they are not the test build).
+
+.PARAMETER Prebuilt
+    Packages programs already in target\release and target\uia\release
+    without building anything. release.yml builds in one job and signs in
+    another, so no dependency's build code runs where signing is possible.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\package.ps1
 #>
+[CmdletBinding()]
+param([switch]$BuildOnly, [switch]$Prebuilt)
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+if ($BuildOnly -and $Prebuilt) { throw 'Either -BuildOnly or -Prebuilt.' }
 
-# My music's paid plans need the store's details (see README, "Selling the
-# plans"). Without them the build still works, with the paid features
-# locked.
-if (-not $env:YTMP_LS_STORE_ID) {
-    Write-Warning 'YTMP_LS_STORE_ID is not set: the paid plans will be locked in this build.'
-}
-if (-not $env:YTMP_TOGETHER_RELAY) {
-    Write-Warning 'YTMP_TOGETHER_RELAY is not set: Watch together will ask for a server address.'
-}
-if ($env:YTMP_DEV_UNLOCK -eq '1') {
-    throw 'YTMP_DEV_UNLOCK=1 unlocks everything: a development build is not packaged.'
-}
+if (-not $Prebuilt) {
+    # My music's paid plans need the store's details (see README, "Selling
+    # the plans"). Without them the build still works, with the paid
+    # features locked.
+    if (-not $env:YTMP_LS_STORE_ID) {
+        Write-Warning 'YTMP_LS_STORE_ID is not set: the paid plans will be locked in this build.'
+    }
+    if (-not $env:YTMP_TOGETHER_RELAY) {
+        Write-Warning 'YTMP_TOGETHER_RELAY is not set: Watch together will ask for a server address.'
+    }
+    if ($env:YTMP_DEV_UNLOCK -eq '1') {
+        throw 'YTMP_DEV_UNLOCK=1 unlocks everything: a development build is not packaged.'
+    }
 
-cargo build --release
-if ($LASTEXITCODE -ne 0) { throw 'The build failed.' }
+    cargo build --release --locked
+    if ($LASTEXITCODE -ne 0) { throw 'The build failed.' }
 
-# The maximum overlay variant (manifest with uiAccess="true"); built
-# separately so it does not overwrite the normal one.
-$env:YTMP_UIACCESS = '1'
-try {
-    cargo build --release --target-dir target\uia
-    if ($LASTEXITCODE -ne 0) { throw 'The build of the overlay variant failed.' }
-} finally {
-    Remove-Item Env:\YTMP_UIACCESS -ErrorAction SilentlyContinue
+    # The maximum overlay variant (manifest with uiAccess="true"); built
+    # separately so it does not overwrite the normal one.
+    $env:YTMP_UIACCESS = '1'
+    try {
+        cargo build --release --locked --target-dir target\uia
+        if ($LASTEXITCODE -ne 0) { throw 'The build of the overlay variant failed.' }
+    } finally {
+        Remove-Item Env:\YTMP_UIACCESS -ErrorAction SilentlyContinue
+    }
 }
 
 # Never the drivable test build (src/e2e.rs).
 & (Join-Path $PSScriptRoot 'check-release-exe.ps1') -Files 'target\release\yt-mini-player.exe', 'target\uia\release\yt-mini-player.exe'
+if ($BuildOnly) {
+    Write-Host 'Built: target\release\yt-mini-player.exe and target\uia\release\yt-mini-player.exe'
+    return
+}
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
 $name = "YT-Mini-Player-$version-win64"

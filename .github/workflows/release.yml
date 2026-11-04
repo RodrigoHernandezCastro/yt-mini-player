@@ -2,6 +2,14 @@
 # fingerprints and a signed provenance attestation (Sigstore) that proves
 # which commit and workflow produced each file:
 #   gh attestation verify YT-Mini-Player-<version>-win64.zip --repo <owner>/<repo>
+#
+# Two jobs. `build` compiles and tests with read-only rights: the build code
+# of every dependency (and cargo-audit) runs there, where nothing can be
+# signed or published. `release` builds nothing: it takes the two programs,
+# signs them (Azure, through OIDC), attests and publishes.
+#
+# Actions are pinned to a commit (a tag can be moved to other code);
+# Dependabot keeps the pins up to date.
 name: Release
 
 on:
@@ -9,15 +17,15 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write      # upload the files to the release
-  id-token: write      # sign the attestation (OIDC)
-  attestations: write
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The zip is named after Cargo.toml's version (tools/package.ps1) and
       # the release after the tag: they must agree, or a release goes out
       # under the wrong number. Checked first, before anything is built.
@@ -29,51 +37,17 @@ jobs:
             "::error file=Cargo.toml::The tag is $env:GITHUB_REF_NAME but Cargo.toml says ${version}. Tag v${version}, or change the version, and push again."
             exit 1
           }
-          "YTMP_VERSION=$version" >> $env:GITHUB_ENV
           "Releasing $version"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Tests
         run: cargo test --locked
       - name: Dependency audit
         run: |
           cargo install cargo-audit --locked
           cargo audit --deny warnings
-      # Authenticode with Azure Artifact Signing, when the repository has it
-      # set up (the variables below; docs/SIGNING.md). Without them the
-      # release is built unsigned, as before, and the log says so.
-      - name: Sign in to Azure (for signing)
-        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
-        uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Signing client
-        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
-        shell: pwsh
-        env:
-          ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-        run: |
-          $dir = Join-Path $env:RUNNER_TEMP 'signing'
-          nuget install Microsoft.ArtifactSigning.Client -OutputDirectory $dir -ExcludeVersion -NonInteractive
-          if ($LASTEXITCODE -ne 0) { throw 'The signing client could not be downloaded.' }
-          $dlib = Get-ChildItem $dir -Recurse -Filter Azure.CodeSigning.Dlib.dll |
-            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
-          if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll (x64) is not in the signing client.' }
-          $metadata = Join-Path $dir 'metadata.json'
-          [ordered]@{
-            Endpoint = $env:ENDPOINT
-            CodeSigningAccountName = $env:ACCOUNT
-            CertificateProfileName = $env:PROFILE
-            CorrelationId = "$env:GITHUB_REPOSITORY@$env:GITHUB_SHA"
-          } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
-          "YTMP_SIGN_ARTIFACT_DLIB=$($dlib.FullName)" >> $env:GITHUB_ENV
-          "YTMP_SIGN_ARTIFACT_METADATA=$metadata" >> $env:GITHUB_ENV
-          # Set up means required: a signing failure stops the release.
-          "YTMP_SIGN_REQUIRED=1" >> $env:GITHUB_ENV
-      - name: Build and package (normal + maximum overlay)
+      - name: Build (normal + maximum overlay)
         shell: pwsh
         # Lemon Squeezy store and the watch together relay (repository
         # variables, not secrets: ids, checkout links and the relay address
@@ -89,7 +63,75 @@ jobs:
           # wss://ytmp-together.<subdomain>.workers.dev. Without it, the app
           # asks for the address the first time.
           YTMP_TOGETHER_RELAY: ${{ vars.YTMP_TOGETHER_RELAY }}
-        run: ./tools/package.ps1
+        run: ./tools/package.ps1 -BuildOnly
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: programs
+          path: |
+            target/release/yt-mini-player.exe
+            target/uia/release/yt-mini-player.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write      # upload the files to the release
+      id-token: write      # sign in to Azure for signing, sign the attestation (OIDC)
+      attestations: write
+    steps:
+      # Only the repository's scripts and the installer's files: nothing is
+      # built here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          "YTMP_VERSION=$version" >> $env:GITHUB_ENV
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: programs
+          path: target
+      # Authenticode with Azure Artifact Signing, when the repository has it
+      # set up (the variables below; docs/SIGNING.md). Without them the
+      # release is built unsigned, as before, and the log says so.
+      - name: Sign in to Azure (for signing)
+        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Signing client
+        if: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
+        shell: pwsh
+        env:
+          ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'signing'
+          # A fixed version: the newest one is not taken blindly.
+          nuget install Microsoft.ArtifactSigning.Client -Version 1.0.151 -OutputDirectory $dir -ExcludeVersion -NonInteractive
+          if ($LASTEXITCODE -ne 0) { throw 'The signing client could not be downloaded.' }
+          $dlib = Get-ChildItem $dir -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll (x64) is not in the signing client.' }
+          $metadata = Join-Path $dir 'metadata.json'
+          [ordered]@{
+            Endpoint = $env:ENDPOINT
+            CodeSigningAccountName = $env:ACCOUNT
+            CertificateProfileName = $env:PROFILE
+            CorrelationId = "$env:GITHUB_REPOSITORY@$env:GITHUB_SHA"
+          } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
+          "YTMP_SIGN_ARTIFACT_DLIB=$($dlib.FullName)" >> $env:GITHUB_ENV
+          "YTMP_SIGN_ARTIFACT_METADATA=$metadata" >> $env:GITHUB_ENV
+          # Set up means required: a signing failure stops the release.
+          "YTMP_SIGN_REQUIRED=1" >> $env:GITHUB_ENV
+      - name: Sign and package (normal + maximum overlay)
+        shell: pwsh
+        run: ./tools/package.ps1 -Prebuilt
       - name: Not the test build
         shell: pwsh
         run: ./tools/check-release-exe.ps1 -Files (Get-ChildItem dist/YT-Mini-Player-*-win64/*.exe).FullName
@@ -103,7 +145,7 @@ jobs:
             "| $($_.Name) | $($sig.Status) | $signer |" >> $env:GITHUB_STEP_SUMMARY
           }
       - name: Provenance attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-path: |
             dist/YT-Mini-Player-*-win64.zip

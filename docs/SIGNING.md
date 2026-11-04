@@ -61,8 +61,11 @@ after a certificate expires; `tools/sign.ps1` refuses a signature without one.
    | `AZURE_SIGNING_ACCOUNT` | the signing account's name |
    | `AZURE_SIGNING_PROFILE` | the certificate profile's name |
 
-4. Push a `v*` tag. `release.yml` signs in with OIDC (`azure/login`), downloads the
-   `Microsoft.ArtifactSigning.Client` package, writes its `metadata.json` and runs the package:
+4. Push a `v*` tag. `release.yml` builds and tests in a job that cannot sign (read-only
+   rights: no dependency's build code ever runs where signing is possible), then a second job
+   that builds nothing takes the two programs, signs in with OIDC (`azure/login`), downloads
+   the `Microsoft.ArtifactSigning.Client` package (a fixed version), writes its
+   `metadata.json` and runs the package (`tools/package.ps1 -Prebuilt`):
    both programs are signed with `signtool /dlib`, timestamped by `timestamp.acs.microsoft.com`
    and verified. The job summary lists each file's signature and signer, and the provenance
    attestation covers the **signed** files.
