@@ -22,26 +22,26 @@ http = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Encryption (RustCrypto, audited): AES-256-GCM for the vault, Argon2id for
 # the PIN, SHA-256 for extension fingerprints; keys wiped from memory.
-aes-gcm = { version = "0.10", features = ["zeroize"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = { version = "0.5", features = ["std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 zeroize = "1"
-getrandom = "0.3"
+getrandom = "0.4"
 # My music: HTTP (Internet Archive, Lemon Squeezy), tags, decoding and
 # acoustic fingerprints (Chromaprint in pure Rust) to find duplicates.
-ureq = { version = "2.12", default-features = false, features = ["json"] }
-lofty = "0.22"
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
+ureq = { version = "3.5", default-features = false, features = ["json"] }
+lofty = "0.25"
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm"] }
 rusty-chromaprint = "0.3"
 walkdir = "2.5"
-sha1 = "0.10"
-base64 = "0.22"
+sha1 = "0.11"
+base64 = "0.23"
 # Watch together: the invitation code (HMAC-SHA256), the handshake
 # (X25519 + HKDF) and the connection to the relay (WebSocket). TLS comes
 # from native-tls below, so on Windows it is SChannel as well.
-hmac = "0.12"
-hkdf = "0.12"
-x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+hmac = "0.13"
+hkdf = "0.13"
+x25519-dalek = { version = "3", features = ["static_secrets", "zeroize"] }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -49,7 +49,7 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 ureq = { version = "2.12", default-features = false, features = ["json", "native-tls"] }
 native-tls = "0.2"
 tray-icon = "0.26"
-global-hotkey = "0.8"
+global-hotkey = "0.9"
 webview2-com = "0.39"
 windows = { version = "0.62", features = [
     "Foundation",
@@ -66,9 +66,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
 ] }
-windows-future = "0.3"
+windows-future = "0.100"
 # The `implement` macro (loopback.rs' COM callback) refers to it by name.
-windows-core = "0.62"
+windows-core = "0.100"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
